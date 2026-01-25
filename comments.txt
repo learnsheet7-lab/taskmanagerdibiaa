@@ -1,0 +1,11 @@
+git add . (Add Files)
+git status
+git commit -m "Comment"
+git push
+
+U - New Files
+M - Changed Files
+
+
+credentails - direct upload 
+credentails - base 64 
