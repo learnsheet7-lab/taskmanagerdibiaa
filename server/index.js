@@ -14,6 +14,14 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
+// --- DEBUGGING LOGS ---
+console.log("------------------------------------------------");
+console.log("Attempting Database Connection...");
+console.log("DB_HOST:", process.env.DB_HOST);
+console.log("DB_USER:", process.env.DB_USER); // This will tell us the truth
+console.log("DB_NAME:", process.env.DB_NAME);
+console.log("------------------------------------------------");
+
 // --- DATABASE CONNECTION (ENV VARIABLES) ---
 const db = mysql.createPool({
     host: process.env.DB_HOST, // Make sure there is NO default 'localhost' here if on Vercel
