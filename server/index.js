@@ -195,9 +195,14 @@ app.get('*', (req, res) => {
 // === NEW CODE ENDS HERE ===
 // =====================================================
 
-// START SERVER
 const PORT = process.env.PORT || 8800;
-app.listen(PORT, () => console.log(`Server Ready on port ${PORT}`));
 
-// Export for Vercel (Required)
+// Only start the server if we are running locally (Not on Vercel)
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+}
+
+// Export the app so Vercel can run it efficiently
 module.exports = app;
