@@ -15,13 +15,15 @@ app.use(cors());
 
 // --- DATABASE CONNECTION (ENV VARIABLES) ---
 const db = mysql.createPool({
-    host: process.env.DB_HOST || 'localhost',
-    user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || 'Kingaki@2828', 
-    database: process.env.DB_NAME || 'task_manager',
-    dateStrings: true, 
-    waitForConnections: true, 
-    connectionLimit: 10
+    host: process.env.DB_HOST, // Make sure there is NO default 'localhost' here if on Vercel
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0,
+    enableKeepAlive: true, // Add this line (helps with Vercel)
+    keepAliveInitialDelay: 0 // Add this line
 });
 
 // --- GOOGLE AUTH (ENV OR FILE) ---
@@ -187,7 +189,8 @@ app.use(express.static(path.join(__dirname, 'build')));
 
 // 2. Handle React Routing (catch-all)
 // This ensures that if someone refreshes the page on /dashboard, it doesn't crash
-app.get('*', (req, res) => {
+// Use /.*/ (without quotes) instead of '*'
+app.get(/.*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'build', 'index.html'));
 });
 
