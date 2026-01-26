@@ -1,8 +1,5 @@
-node_modules
 .env
 credentials.json
-client/node_modules
-server/node_modules
-build
-dist
-.DS_Store
+server/.env
+server/credentials.json
+node_modules

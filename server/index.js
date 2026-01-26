@@ -1,4 +1,5 @@
 require('dotenv').config();
+const path = require('path');
 const express = require('express');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
@@ -177,6 +178,26 @@ app.post('/reports/performance', async (req, res) => {
     } catch(e) { res.status(500).json(e); }
 });
 
+// =====================================================
+// === NEW CODE FOR VERCEL DEPLOYMENT STARTS HERE ===
+// =====================================================
+
+// 1. Tell Node to serve the React files from the 'build' folder
+app.use(express.static(path.join(__dirname, 'build')));
+
+// 2. Handle React Routing (catch-all)
+// This ensures that if someone refreshes the page on /dashboard, it doesn't crash
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'build', 'index.html'));
+});
+
+// =====================================================
+// === NEW CODE ENDS HERE ===
+// =====================================================
+
 // START SERVER
 const PORT = process.env.PORT || 8800;
 app.listen(PORT, () => console.log(`Server Ready on port ${PORT}`));
+
+// Export for Vercel (Required)
+module.exports = app;
