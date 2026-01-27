@@ -32,7 +32,7 @@ const db = mysql.createPool({
     connectionLimit: 10,
     queueLimit: 0,
     enableKeepAlive: true, // Crucial for Vercel
-    keepAliveInitialDelay: 0
+    keepAliveInitialDelay: 0,
     dateStrings: true  // <--- ADD THIS LINE HERE
 });
 
