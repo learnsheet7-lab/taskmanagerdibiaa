@@ -14,30 +14,30 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-// --- DEBUGGING LOGS ---
+// --- DEBUGGING LOGS (Check Vercel Logs to see these) ---
 console.log("------------------------------------------------");
 console.log("Attempting Database Connection...");
 console.log("DB_HOST:", process.env.DB_HOST);
-console.log("DB_USER:", process.env.DB_USER); // This will tell us the truth
+console.log("DB_USER:", process.env.DB_USER); 
 console.log("DB_NAME:", process.env.DB_NAME);
 console.log("------------------------------------------------");
 
 // --- DATABASE CONNECTION (ENV VARIABLES) ---
 const db = mysql.createPool({
-    host: process.env.DB_HOST, // Make sure there is NO default 'localhost' here if on Vercel
+    host: process.env.DB_HOST, 
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0,
-    enableKeepAlive: true, // Add this line (helps with Vercel)
-    keepAliveInitialDelay: 0 // Add this line
+    enableKeepAlive: true, // Crucial for Vercel
+    keepAliveInitialDelay: 0
 });
 
 // --- GOOGLE AUTH (ENV OR FILE) ---
 const getAuth = () => {
-    // Priority 1: Environment Variable (For Hostinger/Production)
+    // Priority 1: Environment Variable (For Vercel/Production)
     if (process.env.GOOGLE_CREDENTIALS) {
         try {
             const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS);
@@ -53,8 +53,7 @@ const getAuth = () => {
     throw new Error("Google Credentials not found in ENV or File");
 };
 
-// ... (Rest of logic remains identical) ...
-
+// --- HELPER FUNCTIONS ---
 const parseToMySQLDate = (dateStr) => {
     if (!dateStr) return null;
     const cleanStr = dateStr.toString().trim();
@@ -190,31 +189,30 @@ app.post('/reports/performance', async (req, res) => {
 });
 
 // =====================================================
-// === NEW CODE FOR VERCEL DEPLOYMENT STARTS HERE ===
+// === DEPLOYMENT CONFIGURATION (VERCEL) ===
 // =====================================================
 
-// 1. Tell Node to serve the React files from the 'build' folder
+// 1. Serve Static Files from React Build
 app.use(express.static(path.join(__dirname, 'build')));
 
-// 2. Handle React Routing (catch-all)
-// This ensures that if someone refreshes the page on /dashboard, it doesn't crash
-// Use /.*/ (without quotes) instead of '*'
+// 2. Handle Catch-All Routing (FIXED: Uses Regex to avoid Vercel 500 Error)
 app.get(/.*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'build', 'index.html'));
 });
 
 // =====================================================
-// === NEW CODE ENDS HERE ===
+// === SERVER STARTUP ===
 // =====================================================
 
 const PORT = process.env.PORT || 8800;
 
-// Only start the server if we are running locally (Not on Vercel)
+// Only start the server if running locally
+// Vercel imports the app as a module, so it skips this block
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });
 }
 
-// Export the app so Vercel can run it efficiently
+// Export app for Vercel
 module.exports = app;
