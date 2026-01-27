@@ -33,6 +33,7 @@ const db = mysql.createPool({
     queueLimit: 0,
     enableKeepAlive: true, // Crucial for Vercel
     keepAliveInitialDelay: 0
+    dateStrings: true  // <--- ADD THIS LINE HERE
 });
 
 // --- GOOGLE AUTH (ENV OR FILE) ---
