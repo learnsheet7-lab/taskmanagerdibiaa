@@ -7,13 +7,15 @@ const customParseFormat = require('dayjs/plugin/customParseFormat');
 dayjs.extend(customParseFormat);
 const { google } = require('googleapis'); 
 const fs = require('fs');
+const path = require('path'); // Add this line
 const multer = require('multer');
 const csv = require('csv-parser');
 
 const app = express();
 app.use(express.json());
 app.use(cors());
-const upload = multer({ dest: 'uploads/' });
+// To this:
+const upload = multer({ dest: '/tmp' });
 
 // --- DATABASE CONNECTION (ENV VARIABLES) ---
 const db = mysql.createPool({
