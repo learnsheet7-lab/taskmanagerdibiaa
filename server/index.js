@@ -109,7 +109,11 @@ app.get('/dashboard/:email/:role', async (req, res) => {
     if(role !== 'Admin') { const [mySteps] = await db.query("SELECT step_id FROM fms_dibiaa_steps_config WHERE doer_emails LIKE ?", [`%${email}%`]); const ids = mySteps.map(s=>s.step_id).join(',') || '0'; fmsBase += ` AND t.step_id IN (${ids})`; }
     const [fmsAll] = await db.query(fmsBase);
     const fmsTotal = fmsAll.length; const fmsPending = fmsAll.filter(t=>t.status==='Pending').length; const fmsCompleted = fmsAll.filter(t=>t.status==='Completed').length;
-    const fmsToday = fmsAll.filter(t => t.status === 'Pending' && dayjs(t.plan_date).isBefore(dayjs().endOf('day')));
+    // Inside app.get('/dashboard/:email/:role') ...
+    const fmsToday = fmsAll.filter(t => {
+        if (!t.plan_date || t.status !== 'Pending') return false;
+        return dayjs(t.plan_date).isBefore(dayjs().endOf('day'));
+    });
 
     res.json({
         delegation: { pending: delPending[0].c, revised: delRevised[0].c, completed: delCompleted[0].c, today: delToday },
@@ -137,79 +141,61 @@ app.post('/mis/plan', async (req, res) => { const {email,date,count}=req.body; c
 app.post('/tasks/upload', upload.single('file'), async (req, res) => { if (!req.file) return res.status(400).json({ message: "No file uploaded" }); try { const results = []; fs.createReadStream(req.file.path).pipe(csv()).on('data', (data) => results.push(data)).on('end', async () => { const [users] = await db.query("SELECT email, name FROM users"); const bulkTasks = []; const assignedBy = req.body.assigned_by || 'Admin Upload'; for (const row of results) { const empName = users.find(u => u.email === row.employee_email)?.name || row.employee_email; const tDate = parseToMySQLDate(row.target_date); if(tDate) { bulkTasks.push(['T-'+Math.floor(Math.random()*90000), empName, row.employee_email, row.approver_email, row.description, tDate, row.priority || 'Medium', row.approval_needed || 'No', assignedBy, row.remarks || '', 'Pending', 'Pending']); } } if (bulkTasks.length > 0) { await db.query("INSERT INTO tasks (task_uid,employee_name,assigned_to_email,approver_email,description,target_date,priority,approval_needed,assigned_by,remarks,status,previous_status) VALUES ?", [bulkTasks]); } fs.unlinkSync(req.file.path); res.json({ message: `Delegated ${bulkTasks.length} tasks.` }); }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.post('/checklist/upload', upload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
-
     try {
         const results = [];
-        fs.createReadStream(req.file.path)
-            .pipe(csv())
-            .on('data', (data) => results.push(data))
-            .on('end', async () => {
-                const [h] = await db.query("SELECT holiday_date FROM holidays");
-                const holidays = new Set(h.map(x => x.holiday_date.toISOString().split('T')[0])); // Ensure date format match
-                const [users] = await db.query("SELECT email, name FROM users");
-                
-                const bulkTasks = [];
-                const endOfYear = dayjs().endOf('year');
+        fs.createReadStream(req.file.path).pipe(csv()).on('data', (data) => results.push(data)).on('end', async () => {
+            const [h] = await db.query("SELECT holiday_date FROM holidays");
+            // FIX: Handle dates correctly whether they are strings or objects
+            const holidays = new Set(h.map(x => dayjs(x.holiday_date).format('YYYY-MM-DD')));
+            const [users] = await db.query("SELECT email, name FROM users");
+            
+            const bulkTasks = [];
+            const endOfYear = dayjs().endOf('year');
 
-                for (const row of results) {
-                    const empEmail = row.employee_email;
-                    const empName = users.find(u => u.email === empEmail)?.name || empEmail;
-                    const startDateStr = parseToMySQLDate(row.start_date);
+            for (const row of results) {
+                const targetEmail = row.employee_email; // FIX: Ensure variable consistency
+                const userMatch = users.find(u => u.email === targetEmail);
+                const empName = userMatch?.name || targetEmail; 
+                const startDateStr = parseToMySQLDate(row.start_date);
 
-                    if (startDateStr) {
-                        let current = dayjs(startDateStr);
-                        
-                        // Loop until end of year
-                        while (current.isBefore(endOfYear) || current.isSame(endOfYear, 'day')) {
-                            const formattedDate = current.format('YYYY-MM-DD');
-                            
-                            // 1. Skip if it's Sunday (unless it's the very first start date)
-                            // 2. Skip if it's in the holiday Set
-                            const isSunday = current.day() === 0;
-                            const isHoliday = holidays.has(formattedDate);
+                if (startDateStr) {
+                    let current = dayjs(startDateStr);
+                    while (current.isBefore(endOfYear) || current.isSame(endOfYear, 'day')) {
+                        const formattedDate = current.format('YYYY-MM-DD');
+                        const isSunday = current.day() === 0;
+                        const isHoliday = holidays.has(formattedDate);
 
-                            if ((!isSunday || formattedDate === startDateStr) && !isHoliday) {
-                                bulkTasks.push([
-                                    'CHK-' + Math.floor(Math.random() * 1000000), // Increased range to avoid collisions
-                                    row.description,
-                                    empEmail,
-                                    empName,
-                                    row.frequency,
-                                    formattedDate,
-                                    'Pending'
-                                ]);
-                            }
-
-                            // Increment based on frequency
-                            if (row.frequency === 'Daily') {
-                                current = current.add(1, 'day');
-                            } else if (row.frequency === 'Weekly') {
-                                current = current.add(1, 'week');
-                            } else if (row.frequency === 'Monthly') {
-                                current = current.add(1, 'month');
-                            } else if (row.frequency === 'Quarterly') {
-                                current = current.add(3, 'month');
-                            } else {
-                                // Default/Yearly - Break if frequency is weird to avoid infinite loops
-                                current = current.add(1, 'year');
-                                if (row.frequency !== 'Yearly') break; 
-                            }
+                        if ((!isSunday || formattedDate === startDateStr) && !isHoliday) {
+                            bulkTasks.push([
+                                'CHK-' + Math.floor(Math.random() * 1000000), // Increased range
+                                row.description,
+                                targetEmail,
+                                empName,
+                                row.frequency,
+                                formattedDate,
+                                'Pending'
+                            ]);
                         }
+                        // Increment logic
+                        if (row.frequency === 'Daily') current = current.add(1, 'day');
+                        else if (row.frequency === 'Weekly') current = current.add(1, 'week');
+                        else if (row.frequency === 'Monthly') current = current.add(1, 'month');
+                        else if (row.frequency === 'Quarterly') current = current.add(3, 'month');
+                        else { current = current.add(1, 'year'); if (row.frequency !== 'Yearly') break; }
                     }
                 }
+            }
 
-                if (bulkTasks.length > 0) {
-                    // Chunk the inserts to prevent "Message too large" errors in MySQL
-                    const chunkSize = 1000;
-                    for (let i = 0; i < bulkTasks.length; i += chunkSize) {
-                        const chunk = bulkTasks.slice(i, i + chunkSize);
-                        await db.query("INSERT INTO checklist_tasks (uid, description, employee_email, employee_name, frequency, target_date, status) VALUES ?", [chunk]);
-                    }
+            if (bulkTasks.length > 0) {
+                // FIX: Chunking to prevent MySQL packet size errors
+                const chunkSize = 1000;
+                for (let i = 0; i < bulkTasks.length; i += chunkSize) {
+                    await db.query("INSERT INTO checklist_tasks (uid,description,employee_email,employee_name,frequency,target_date,status) VALUES ?", [bulkTasks.slice(i, i + chunkSize)]);
                 }
-
-                fs.unlinkSync(req.file.path);
-                res.json({ message: `Processed ${bulkTasks.length} tasks successfully.` });
-            });
+            }
+            fs.unlinkSync(req.file.path);
+            res.json({ message: `Bulk Processed ${bulkTasks.length} tasks.` });
+        });
     } catch (e) {
         if (req.file) fs.unlinkSync(req.file.path);
         res.status(500).json({ error: e.message });
@@ -324,7 +310,23 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
 });
 
 app.get('/fms/dibiaa-tasks', async (req, res) => { const { email, role } = req.query; const [configs] = await db.query("SELECT * FROM fms_dibiaa_steps_config"); const relevantSteps = role === 'Admin' ? configs : configs.filter(c => c.doer_emails && c.doer_emails.includes(email)); const stepIds = relevantSteps.map(s => s.step_id); if (stepIds.length === 0) return res.json({}); const [tasks] = await db.query(`SELECT t.*, r.job_number, r.company_name, r.box_type, r.quantity, r.quantity as total_qty, s.step_name, s.visible_columns, r.timestamp, r.otd_type, r.order_by, r.box_style, r.box_color, r.printing_type, r.printing_color, r.specification, r.city, r.lead_time, r.repeat_new FROM fms_dibiaa_tasks t JOIN fms_dibiaa_raw r ON t.job_id = r.job_id JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id WHERE t.status = 'Pending' AND t.step_id IN (?) ORDER BY t.plan_date ASC`, [stepIds]); const grouped = {}; relevantSteps.forEach(s => { const stepTasks = tasks.filter(t => t.step_id === s.step_id); if (stepTasks.length > 0) grouped[s.step_name] = stepTasks; }); res.json(grouped); });
-app.post('/fms/dibiaa-complete', async (req, res) => { const { task_id, delay_reason, contractor, printer, qty } = req.body; const now = dayjs().format('YYYY-MM-DD HH:mm:ss'); const [t] = await db.query("SELECT plan_date FROM fms_dibiaa_tasks WHERE id=?", [task_id]); const plan = dayjs(t[0].plan_date); const delayHrs = dayjs().diff(plan, 'hour'); await db.query("UPDATE fms_dibiaa_tasks SET status='Completed', actual_date=?, delay_hours=?, delay_reason=?, custom_field_1=?, custom_field_2=? WHERE id=?", [now, delayHrs > 0 ? delayHrs : 0, delay_reason, contractor || printer, qty, task_id]); res.json({message: "Task Completed"}); });
+app.post('/fms/dibiaa-complete', async (req, res) => {
+    const { task_id, delay_reason, contractor, printer, qty } = req.body;
+    const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
+    
+    const [t] = await db.query("SELECT plan_date FROM fms_dibiaa_tasks WHERE id=?", [task_id]);
+    
+    // FIX: Check if task exists
+    if (!t || t.length === 0) return res.status(404).json({ message: "Task not found" });
+
+    const plan = dayjs(t[0].plan_date);
+    const delayHrs = dayjs().diff(plan, 'hour');
+    
+    await db.query("UPDATE fms_dibiaa_tasks SET status='Completed', actual_date=?, delay_hours=?, delay_reason=?, custom_field_1=?, custom_field_2=? WHERE id=?", 
+        [now, delayHrs > 0 ? delayHrs : 0, delay_reason, contractor || printer, qty, task_id]);
+    
+    res.json({message: "Task Completed"});
+});
 app.get('/fms/dibiaa-config', async (req, res) => { const [r] = await db.query("SELECT * FROM fms_dibiaa_steps_config"); res.json(r); });
 app.post('/fms/dibiaa-config', async (req, res) => { const { step_id, doer_emails, visible_columns } = req.body; await db.query("UPDATE fms_dibiaa_steps_config SET doer_emails=?, visible_columns=? WHERE step_id=?", [doer_emails, visible_columns, step_id]); res.json({message: "Saved"}); });
 
