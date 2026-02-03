@@ -174,7 +174,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
         if(!auth) return res.status(500).json({error: "Google Auth Failed"});
 
         const sheets = google.sheets({ version: 'v4', auth });
-        const response = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `fmstask!A8:O1000` });
+        const response = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `fmstask!A2:O` });
         const rows = response.data.values;
         if(!rows || rows.length === 0) return res.json({message: "No data found"});
 
