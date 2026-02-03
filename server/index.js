@@ -135,7 +135,86 @@ app.post('/holidays', async (req, res) => { await db.query("INSERT INTO holidays
 app.get('/mis/tasks', async (req, res) => { const [rows]=await db.query("SELECT description,target_date,status,completed_at FROM tasks WHERE assigned_to_email=? AND target_date BETWEEN ? AND ? ORDER BY target_date",[req.query.email,req.query.start,req.query.end]); res.json(rows); });
 app.post('/mis/plan', async (req, res) => { const {email,date,count}=req.body; const [ex]=await db.query("SELECT id FROM employee_plans WHERE employee_email=? AND plan_date=?",[email,date]); if(ex.length>0) await db.query("UPDATE employee_plans SET planned_count=? WHERE id=?",[count,ex[0].id]); else await db.query("INSERT INTO employee_plans (employee_email,plan_date,planned_count) VALUES (?,?,?)",[email,date,count]); res.json({message:"Saved"}); });
 app.post('/tasks/upload', upload.single('file'), async (req, res) => { if (!req.file) return res.status(400).json({ message: "No file uploaded" }); try { const results = []; fs.createReadStream(req.file.path).pipe(csv()).on('data', (data) => results.push(data)).on('end', async () => { const [users] = await db.query("SELECT email, name FROM users"); const bulkTasks = []; const assignedBy = req.body.assigned_by || 'Admin Upload'; for (const row of results) { const empName = users.find(u => u.email === row.employee_email)?.name || row.employee_email; const tDate = parseToMySQLDate(row.target_date); if(tDate) { bulkTasks.push(['T-'+Math.floor(Math.random()*90000), empName, row.employee_email, row.approver_email, row.description, tDate, row.priority || 'Medium', row.approval_needed || 'No', assignedBy, row.remarks || '', 'Pending', 'Pending']); } } if (bulkTasks.length > 0) { await db.query("INSERT INTO tasks (task_uid,employee_name,assigned_to_email,approver_email,description,target_date,priority,approval_needed,assigned_by,remarks,status,previous_status) VALUES ?", [bulkTasks]); } fs.unlinkSync(req.file.path); res.json({ message: `Delegated ${bulkTasks.length} tasks.` }); }); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.post('/checklist/upload', upload.single('file'), async (req, res) => { if (!req.file) return res.status(400).json({ message: "No file uploaded" }); try { const results = []; fs.createReadStream(req.file.path).pipe(csv()).on('data', (data) => results.push(data)).on('end', async () => { const [h] = await db.query("SELECT holiday_date FROM holidays"); const holidays = new Set(h.map(x => x.holiday_date)); const [users] = await db.query("SELECT email, name FROM users"); const bulkTasks = []; for (const row of results) { const empEmail = row.employee_email; const empName = users.find(u => u.email === empEmail)?.name || empEmail; const startDate = parseToMySQLDate(row.start_date); if (startDate) { let c = dayjs(startDate); const end = dayjs().endOf('year'); while (c.isBefore(end) || c.isSame(end, 'day')) { const d = c.format('YYYY-MM-DD'); if ((c.day() !== 0 || d === startDate) && !holidays.has(d)) { bulkTasks.push(['CHK-' + Math.floor(Math.random() * 100000), row.description, empEmail, empName, row.frequency, d, 'Pending']); } if (row.frequency === 'Daily') c = c.add(1, 'day'); else if (row.frequency === 'Weekly') c = c.add(1, 'week'); else if (row.frequency === 'Monthly') c = c.add(1, 'month'); else if (row.frequency === 'Quarterly') c = c.add(3, 'month'); else c = c.add(1, 'year'); } } } if (bulkTasks.length > 0) { await db.query("INSERT INTO checklist_tasks (uid,description,employee_email,employee_name,frequency,target_date,status) VALUES ?", [bulkTasks]); } fs.unlinkSync(req.file.path); res.json({ message: `Bulk Processed.` }); }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.post('/checklist/upload', upload.single('file'), async (req, res) => {
+    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+
+    try {
+        const results = [];
+        fs.createReadStream(req.file.path)
+            .pipe(csv())
+            .on('data', (data) => results.push(data))
+            .on('end', async () => {
+                const [h] = await db.query("SELECT holiday_date FROM holidays");
+                const holidays = new Set(h.map(x => x.holiday_date.toISOString().split('T')[0])); // Ensure date format match
+                const [users] = await db.query("SELECT email, name FROM users");
+                
+                const bulkTasks = [];
+                const endOfYear = dayjs().endOf('year');
+
+                for (const row of results) {
+                    const empEmail = row.employee_email;
+                    const empName = users.find(u => u.email === empEmail)?.name || empEmail;
+                    const startDateStr = parseToMySQLDate(row.start_date);
+
+                    if (startDateStr) {
+                        let current = dayjs(startDateStr);
+                        
+                        // Loop until end of year
+                        while (current.isBefore(endOfYear) || current.isSame(endOfYear, 'day')) {
+                            const formattedDate = current.format('YYYY-MM-DD');
+                            
+                            // 1. Skip if it's Sunday (unless it's the very first start date)
+                            // 2. Skip if it's in the holiday Set
+                            const isSunday = current.day() === 0;
+                            const isHoliday = holidays.has(formattedDate);
+
+                            if ((!isSunday || formattedDate === startDateStr) && !isHoliday) {
+                                bulkTasks.push([
+                                    'CHK-' + Math.floor(Math.random() * 1000000), // Increased range to avoid collisions
+                                    row.description,
+                                    empEmail,
+                                    empName,
+                                    row.frequency,
+                                    formattedDate,
+                                    'Pending'
+                                ]);
+                            }
+
+                            // Increment based on frequency
+                            if (row.frequency === 'Daily') {
+                                current = current.add(1, 'day');
+                            } else if (row.frequency === 'Weekly') {
+                                current = current.add(1, 'week');
+                            } else if (row.frequency === 'Monthly') {
+                                current = current.add(1, 'month');
+                            } else if (row.frequency === 'Quarterly') {
+                                current = current.add(3, 'month');
+                            } else {
+                                // Default/Yearly - Break if frequency is weird to avoid infinite loops
+                                current = current.add(1, 'year');
+                                if (row.frequency !== 'Yearly') break; 
+                            }
+                        }
+                    }
+                }
+
+                if (bulkTasks.length > 0) {
+                    // Chunk the inserts to prevent "Message too large" errors in MySQL
+                    const chunkSize = 1000;
+                    for (let i = 0; i < bulkTasks.length; i += chunkSize) {
+                        const chunk = bulkTasks.slice(i, i + chunkSize);
+                        await db.query("INSERT INTO checklist_tasks (uid, description, employee_email, employee_name, frequency, target_date, status) VALUES ?", [chunk]);
+                    }
+                }
+
+                fs.unlinkSync(req.file.path);
+                res.json({ message: `Processed ${bulkTasks.length} tasks successfully.` });
+            });
+    } catch (e) {
+        if (req.file) fs.unlinkSync(req.file.path);
+        res.status(500).json({ error: e.message });
+    }
+});
 
 // --- MIS REPORT (FIXED PREVIOUS PLAN LOGIC) ---
 app.get('/mis/report', async (req, res) => { 
@@ -208,19 +287,19 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             const hasInner = (K || '').toLowerCase().includes('inner'); const isOffsetFoil = (I === 'Offset Print' || I === 'Foil Print'); const isScreenPrint = (I === 'Screen print');
             
             let plans = {}; 
-            if (I !== 'No' && A) plans[4] = addWorkdays(A, 3); //step 4 condition
+            if (I !== 'No' && A) plans[4] = addWorkdays(A, 3); //step 4 condition - ok
             const step4Act = getAct(4);
-            if ((B==='OTD' || B==='Jewellery (OTD)')) { if (I !== 'No' && step4Act) plans[1] = addWorkdays(step4Act, 6); else if (I === 'No' && A) plans[1] = addWorkdays(A, 6); } //step1 plan
+            if ((B==='OTD' || B==='Jewellery (OTD)')) { if (step4Act) plans[1] = addWorkdays(step4Act, 6); } //step1 plan
             const step1Act = getAct(1); 
             // Step 2 Plan Logic
-            if ((B === 'OTD' || B === 'Jewellery (OTD)') && I !== 'No' && step1Act) {
+            if ((B === 'OTD' || B === 'Jewellery (OTD)') && step1Act) {
                 plans[2] = addWorkdays(step1Act, 1);
-            } else if (I === 'No' && A && B !== 'OTD' && B !== 'Jewellery (OTD)') {
+            } else if (I === 'No' && A ) {
                 plans[2] = addWorkdays(A, 1);
             } else if (step4Act) {
                 plans[2] = addWorkdays(step4Act, 1);
             }
-            if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1); //step3 plan
+            if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1); //step3 plan - ok
             if (!(F==='Paper Bag' || (F||'').endsWith('Tray'))) { if (getAct(2)) plans[5] = addWorkdays(getAct(2), 3); } //step5 plan
             if (I === 'Foil Print' && getAct(3)) plans[6] = addWorkdays(getAct(3), 3); //step6 plan
             if (I !== 'Foil Print' && getAct(3)) plans[7] = addWorkdays(getAct(3), 3); else if (getAct(6)) plans[7] = addWorkdays(getAct(6), 3); //step7 plan
