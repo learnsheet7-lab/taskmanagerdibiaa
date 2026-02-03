@@ -182,7 +182,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
         const rawValues = [];
         for(let i=0; i<rows.length; i++) {
             const r = rows[i];
-            const rowIndex = 8 + i;
+            const rowIndex = 2 + i;
             rawValues.push([
                 rowIndex, parseToMySQLDateTime(r[0]), r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], parseToMySQLDate(r[13]), r[14]
             ]);
