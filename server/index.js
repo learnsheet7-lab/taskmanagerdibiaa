@@ -201,7 +201,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
         // 3. Logic Engine
         const taskValues = [];
         for (let i = 0; i < rows.length; i++) {
-            const r = rows[i]; const rowIndex = 8 + i; const jobId = jobMap[rowIndex];
+            const r = rows[i]; const rowIndex = 2 + i; const jobId = jobMap[rowIndex];
             if(!jobId) continue;
             const getAct = (s) => taskMap[`${jobId}_${s}`];
             const A = parseDate(r[0]); const B = r[1]; const F = r[5]; const G = r[6]; const I = r[8]; const K = r[10]; const N = parseDate(r[13]);
