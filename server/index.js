@@ -7,17 +7,16 @@ const customParseFormat = require('dayjs/plugin/customParseFormat');
 dayjs.extend(customParseFormat);
 const { google } = require('googleapis'); 
 const fs = require('fs');
-const path = require('path'); // Add this line
+const path = require('path'); 
 const multer = require('multer');
 const csv = require('csv-parser');
 
 const app = express();
 app.use(express.json());
 app.use(cors());
-// To this:
 const upload = multer({ dest: '/tmp' });
 
-// --- DATABASE CONNECTION (ENV VARIABLES) ---
+// --- DATABASE CONNECTION ---
 const db = mysql.createPool({
     host: process.env.DB_HOST, 
     user: process.env.DB_USER,
@@ -26,14 +25,13 @@ const db = mysql.createPool({
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0,
-    enableKeepAlive: true, // Crucial for Vercel
+    enableKeepAlive: true,
     keepAliveInitialDelay: 0,
-    dateStrings: true  // <--- ADD THIS LINE HERE
+    dateStrings: true 
 });
 
-// --- GOOGLE AUTH (ENV OR FILE) ---
+// --- GOOGLE AUTH ---
 const getAuth = () => {
-    // Priority 1: Environment Variable (For Vercel/Production)
     if (process.env.GOOGLE_CREDENTIALS) {
         try {
             const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS);
@@ -42,14 +40,13 @@ const getAuth = () => {
             console.error("Error parsing GOOGLE_CREDENTIALS env var", e);
         }
     }
-    // Priority 2: Local File (For Local Development)
     if (fs.existsSync('credentials.json')) {
         return new google.auth.GoogleAuth({ keyFile: 'credentials.json', scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
     }
     throw new Error("Google Credentials not found in ENV or File");
 };
 
-// HELPERS
+// --- HELPERS ---
 const parseToMySQLDateTime = (d) => {
     if (!d) return null;
     const dt = dayjs(d.toString().trim(), ['DD/MM/YYYY HH:mm:ss', 'YYYY-MM-DD HH:mm:ss', 'MM/DD/YYYY HH:mm:ss', 'DD-MM-YYYY HH:mm:ss'], true);
@@ -109,7 +106,6 @@ app.get('/dashboard/:email/:role', async (req, res) => {
     if(role !== 'Admin') { const [mySteps] = await db.query("SELECT step_id FROM fms_dibiaa_steps_config WHERE doer_emails LIKE ?", [`%${email}%`]); const ids = mySteps.map(s=>s.step_id).join(',') || '0'; fmsBase += ` AND t.step_id IN (${ids})`; }
     const [fmsAll] = await db.query(fmsBase);
     const fmsTotal = fmsAll.length; const fmsPending = fmsAll.filter(t=>t.status==='Pending').length; const fmsCompleted = fmsAll.filter(t=>t.status==='Completed').length;
-    // Inside app.get('/dashboard/:email/:role') ...
     const fmsToday = fmsAll.filter(t => {
         if (!t.plan_date || t.status !== 'Pending') return false;
         return dayjs(t.plan_date).isBefore(dayjs().endOf('day'));
@@ -122,10 +118,32 @@ app.get('/dashboard/:email/:role', async (req, res) => {
     }); 
 });
 
-// --- MODULES ---
+// --- CHECKLIST MODULE (UPDATED) ---
 app.post('/checklist', async (req, res) => { const { description, employee_email, employee_name, frequency, start_date } = req.body; const [h] = await db.query("SELECT holiday_date FROM holidays"); const holidays = new Set(h.map(x=>x.holiday_date)); const tasks=[]; let c=dayjs(start_date); const end=dayjs().endOf('year'); while(c.isBefore(end)||c.isSame(end,'day')){const d=c.format('YYYY-MM-DD'); if((c.day()!==0||d===start_date)&&!holidays.has(d)) tasks.push(['CHK-'+Math.floor(Math.random()*1000),description,employee_email,employee_name,frequency,d,'Pending']); if(frequency==='Daily')c=c.add(1,'day');else if(frequency==='Weekly')c=c.add(1,'week');else if(frequency==='Monthly')c=c.add(1,'month');else if(frequency==='Quarterly')c=c.add(3,'month');else c=c.add(1,'year');} if(tasks.length>0){await db.query("INSERT INTO checklist_tasks (uid,description,employee_email,employee_name,frequency,target_date,status) VALUES ?", [tasks]); res.json({message:`Generated ${tasks.length}`});} else res.json({message:"No dates"}); });
-app.get('/checklist/:email/:role', async (req, res) => { const today=dayjs().format('YYYY-MM-DD'); const q=req.params.role==='Admin'?"SELECT * FROM checklist_tasks WHERE (target_date <= ? AND status='Pending') OR target_date = ? ORDER BY target_date ASC":"SELECT * FROM checklist_tasks WHERE employee_email=? AND ((target_date<=? AND status='Pending') OR target_date=?) ORDER BY target_date ASC"; const [r]=await db.query(q,req.params.role==='Admin'?[today,today]:[req.params.email,today,today]); res.json(r); });
+
+// FETCH CHECKLIST (UPDATED: Strictly excludes Completed tasks)
+app.get('/checklist/:email/:role', async (req, res) => { 
+    const today = dayjs().format('YYYY-MM-DD'); 
+    let q = "";
+    let params = [];
+    
+    if (req.params.role === 'Admin') {
+        // Show all non-completed tasks that are due today or overdue
+        q = "SELECT * FROM checklist_tasks WHERE status != 'Completed' AND target_date <= ? ORDER BY target_date ASC";
+        params = [today];
+    } else {
+        // Show user's specific non-completed tasks that are due today or overdue
+        q = "SELECT * FROM checklist_tasks WHERE employee_email=? AND status != 'Completed' AND target_date <= ? ORDER BY target_date ASC";
+        params = [req.params.email, today];
+    }
+    
+    const [r] = await db.query(q, params); 
+    res.json(r); 
+});
+
 app.put('/checklist/complete', async (req, res) => { await db.query("UPDATE checklist_tasks SET status='Completed', completed_at=NOW() WHERE id=?", [req.body.id]); res.json({message:"Done"}); });
+
+// --- TASKS MODULE ---
 app.post('/tasks', async (req, res) => { await db.query("INSERT INTO tasks (task_uid,employee_name,assigned_to_email,approver_email,description,target_date,priority,approval_needed,assigned_by,remarks,status,previous_status) VALUES (?,?,?,?,?,?,?,?,?,?,'Pending','Pending')",['T-'+Math.floor(Math.random()*9000),req.body.employee_name,req.body.email,req.body.approver_email,req.body.description,req.body.target_date,req.body.priority,req.body.approval_needed,req.body.assigned_by||'System',req.body.remarks||'']); res.json({message:"Delegated"}); });
 app.get('/tasks/:email/:role', async (req, res) => { const q=req.params.role==='Admin'?"SELECT * FROM tasks ORDER BY created_at DESC":"SELECT * FROM tasks WHERE assigned_to_email=? ORDER BY created_at DESC"; const [r]=await db.query(q,[req.params.email]); res.json(r); });
 app.delete('/tasks/:id', async (req, res) => { await db.query("DELETE FROM tasks WHERE id=?", [req.params.id]); res.json({message:"Deleted"}); });
@@ -138,6 +156,8 @@ app.get('/holidays', async (req, res) => { const [r] = await db.query("SELECT * 
 app.post('/holidays', async (req, res) => { await db.query("INSERT INTO holidays (holiday_date, name) VALUES (?,?)", [req.body.date, req.body.name]); res.json({message:"Added"}); });
 app.get('/mis/tasks', async (req, res) => { const [rows]=await db.query("SELECT description,target_date,status,completed_at FROM tasks WHERE assigned_to_email=? AND target_date BETWEEN ? AND ? ORDER BY target_date",[req.query.email,req.query.start,req.query.end]); res.json(rows); });
 app.post('/mis/plan', async (req, res) => { const {email,date,count}=req.body; const [ex]=await db.query("SELECT id FROM employee_plans WHERE employee_email=? AND plan_date=?",[email,date]); if(ex.length>0) await db.query("UPDATE employee_plans SET planned_count=? WHERE id=?",[count,ex[0].id]); else await db.query("INSERT INTO employee_plans (employee_email,plan_date,planned_count) VALUES (?,?,?)",[email,date,count]); res.json({message:"Saved"}); });
+
+// --- UPLOADS ---
 app.post('/tasks/upload', upload.single('file'), async (req, res) => { if (!req.file) return res.status(400).json({ message: "No file uploaded" }); try { const results = []; fs.createReadStream(req.file.path).pipe(csv()).on('data', (data) => results.push(data)).on('end', async () => { const [users] = await db.query("SELECT email, name FROM users"); const bulkTasks = []; const assignedBy = req.body.assigned_by || 'Admin Upload'; for (const row of results) { const empName = users.find(u => u.email === row.employee_email)?.name || row.employee_email; const tDate = parseToMySQLDate(row.target_date); if(tDate) { bulkTasks.push(['T-'+Math.floor(Math.random()*90000), empName, row.employee_email, row.approver_email, row.description, tDate, row.priority || 'Medium', row.approval_needed || 'No', assignedBy, row.remarks || '', 'Pending', 'Pending']); } } if (bulkTasks.length > 0) { await db.query("INSERT INTO tasks (task_uid,employee_name,assigned_to_email,approver_email,description,target_date,priority,approval_needed,assigned_by,remarks,status,previous_status) VALUES ?", [bulkTasks]); } fs.unlinkSync(req.file.path); res.json({ message: `Delegated ${bulkTasks.length} tasks.` }); }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.post('/checklist/upload', upload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
@@ -145,38 +165,24 @@ app.post('/checklist/upload', upload.single('file'), async (req, res) => {
         const results = [];
         fs.createReadStream(req.file.path).pipe(csv()).on('data', (data) => results.push(data)).on('end', async () => {
             const [h] = await db.query("SELECT holiday_date FROM holidays");
-            // FIX: Handle dates correctly whether they are strings or objects
             const holidays = new Set(h.map(x => dayjs(x.holiday_date).format('YYYY-MM-DD')));
             const [users] = await db.query("SELECT email, name FROM users");
-            
             const bulkTasks = [];
             const endOfYear = dayjs().endOf('year');
-
             for (const row of results) {
-                const targetEmail = row.employee_email; // FIX: Ensure variable consistency
+                const targetEmail = row.employee_email;
                 const userMatch = users.find(u => u.email === targetEmail);
                 const empName = userMatch?.name || targetEmail; 
                 const startDateStr = parseToMySQLDate(row.start_date);
-
                 if (startDateStr) {
                     let current = dayjs(startDateStr);
                     while (current.isBefore(endOfYear) || current.isSame(endOfYear, 'day')) {
                         const formattedDate = current.format('YYYY-MM-DD');
                         const isSunday = current.day() === 0;
                         const isHoliday = holidays.has(formattedDate);
-
                         if ((!isSunday || formattedDate === startDateStr) && !isHoliday) {
-                            bulkTasks.push([
-                                'CHK-' + Math.floor(Math.random() * 1000000), // Increased range
-                                row.description,
-                                targetEmail,
-                                empName,
-                                row.frequency,
-                                formattedDate,
-                                'Pending'
-                            ]);
+                            bulkTasks.push(['CHK-' + Math.floor(Math.random() * 1000000), row.description, targetEmail, empName, row.frequency, formattedDate, 'Pending']);
                         }
-                        // Increment logic
                         if (row.frequency === 'Daily') current = current.add(1, 'day');
                         else if (row.frequency === 'Weekly') current = current.add(1, 'week');
                         else if (row.frequency === 'Monthly') current = current.add(1, 'month');
@@ -185,9 +191,7 @@ app.post('/checklist/upload', upload.single('file'), async (req, res) => {
                     }
                 }
             }
-
             if (bulkTasks.length > 0) {
-                // FIX: Chunking to prevent MySQL packet size errors
                 const chunkSize = 1000;
                 for (let i = 0; i < bulkTasks.length; i += chunkSize) {
                     await db.query("INSERT INTO checklist_tasks (uid,description,employee_email,employee_name,frequency,target_date,status) VALUES ?", [bulkTasks.slice(i, i + chunkSize)]);
@@ -202,12 +206,9 @@ app.post('/checklist/upload', upload.single('file'), async (req, res) => {
     }
 });
 
-// --- MIS REPORT (FIXED PREVIOUS PLAN LOGIC) ---
+// --- MIS REPORT ---
 app.get('/mis/report', async (req, res) => { 
     const {start,end}=req.query; 
-    // Logic: 
-    // 1. "planned": Fetches the *single most recent* plan set ON or BEFORE the 'end' date. (Not sum, just the last value).
-    // 2. "total_task", "completed", etc.: Counts tasks strictly BETWEEN start and end dates.
     const sql=`
         SELECT u.name as employee_name, u.email as employee_email,
         COALESCE((
@@ -231,7 +232,7 @@ app.get('/mis/report', async (req, res) => {
     res.json(rows); 
 });
 
-// ================= DIBIAA FMS ENGINE (BULK OPTIMIZED) =================
+// ================= DIBIAA FMS ENGINE (UPDATED SYNC LOGIC) =================
 app.post('/fms/sync-dibiaa', async (req, res) => {
     try {
         const SHEET_ID = '1C3qHR_jbjHgOQCM7MwRB4AZXtuY2W9jLpqIAEbYFWkQ';
@@ -243,7 +244,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
         const rows = response.data.values;
         if(!rows || rows.length === 0) return res.json({message: "No data found"});
 
-        // 1. Bulk Insert Raw
+        // 1. Bulk Update Raw Table
         const rawValues = [];
         for(let i=0; i<rows.length; i++) {
             const r = rows[i];
@@ -253,11 +254,18 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             ]);
         }
         if(rawValues.length > 0) {
-            const rawSql = `INSERT INTO fms_dibiaa_raw (sheet_row_index, timestamp, otd_type, job_number, order_by, company_name, box_type, box_style, box_color, printing_type, printing_color, specification, city, quantity, lead_time, repeat_new) VALUES ? ON DUPLICATE KEY UPDATE otd_type=VALUES(otd_type), box_type=VALUES(box_type), printing_type=VALUES(printing_type), quantity=VALUES(quantity)`;
+            // Update all raw data fields if the row already exists
+            const rawSql = `INSERT INTO fms_dibiaa_raw (sheet_row_index, timestamp, otd_type, job_number, order_by, company_name, box_type, box_style, box_color, printing_type, printing_color, specification, city, quantity, lead_time, repeat_new) 
+                            VALUES ? 
+                            ON DUPLICATE KEY UPDATE 
+                            otd_type=VALUES(otd_type), box_type=VALUES(box_type), printing_type=VALUES(printing_type), 
+                            quantity=VALUES(quantity), company_name=VALUES(company_name), box_style=VALUES(box_style),
+                            box_color=VALUES(box_color), printing_color=VALUES(printing_color), specification=VALUES(specification),
+                            city=VALUES(city), lead_time=VALUES(lead_time), repeat_new=VALUES(repeat_new)`;
             await db.query(rawSql, [rawValues]);
         }
 
-        // 2. Fetch Maps
+        // 2. Fetch Maps for Task Logic
         const [jobs] = await db.query("SELECT job_id, sheet_row_index FROM fms_dibiaa_raw");
         const jobMap = {}; jobs.forEach(j => jobMap[j.sheet_row_index] = j.job_id);
         const [allTasks] = await db.query("SELECT job_id, step_id, actual_date FROM fms_dibiaa_tasks");
@@ -268,28 +276,24 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
         for (let i = 0; i < rows.length; i++) {
             const r = rows[i]; const rowIndex = 2 + i; const jobId = jobMap[rowIndex];
             if(!jobId) continue;
+            
             const getAct = (s) => taskMap[`${jobId}_${s}`];
             const A = parseDate(r[0]); const B = r[1]; const F = r[5]; const G = r[6]; const I = r[8]; const K = r[10]; const N = parseDate(r[13]);
             const hasInner = (K || '').toLowerCase().includes('inner'); const isOffsetFoil = (I === 'Offset Print' || I === 'Foil Print'); const isScreenPrint = (I === 'Screen print');
             
             let plans = {}; 
-            if (I !== 'No' && A) plans[4] = addWorkdays(A, 3); //step 4 condition - ok
+            if (I !== 'No' && A) plans[4] = addWorkdays(A, 3);
             const step4Act = getAct(4);
-            if ((B==='OTD' || B==='Jewellery (OTD)')) { if (step4Act) plans[1] = addWorkdays(step4Act, 6); } //step1 plan
+            if ((B==='OTD' || B==='Jewellery (OTD)')) { if (step4Act) plans[1] = addWorkdays(step4Act, 6); }
             const step1Act = getAct(1); 
-            // Step 2 Plan Logic
-            if ((B === 'OTD' || B === 'Jewellery (OTD)') && step1Act) {
-                plans[2] = addWorkdays(step1Act, 1);
-            } else if (I === 'No' && A ) {
-                plans[2] = addWorkdays(A, 1);
-            } else if (step4Act) {
-                plans[2] = addWorkdays(step4Act, 1);
-            }
-            if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1); //step3 plan - ok
-            if (!(F==='Paper Bag' || (F||'').endsWith('Tray'))) { if (getAct(2)) plans[5] = addWorkdays(getAct(2), 3); } //step5 plan
-            if (I === 'Foil Print' && getAct(3)) plans[6] = addWorkdays(getAct(3), 3); //step6 plan
-            if (I !== 'Foil Print' && getAct(3)) plans[7] = addWorkdays(getAct(3), 3); else if (getAct(6)) plans[7] = addWorkdays(getAct(6), 3); //step7 plan
-            if (getAct(7)) plans[8] = addWorkdays(getAct(7), 1); //step8 plan
+            if ((B === 'OTD' || B === 'Jewellery (OTD)') && step1Act) { plans[2] = addWorkdays(step1Act, 1); } 
+            else if (I === 'No' && A ) { plans[2] = addWorkdays(A, 1); } 
+            else if (step4Act) { plans[2] = addWorkdays(step4Act, 1); }
+            if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1); 
+            if (!(F==='Paper Bag' || (F||'').endsWith('Tray'))) { if (getAct(2)) plans[5] = addWorkdays(getAct(2), 3); }
+            if (I === 'Foil Print' && getAct(3)) plans[6] = addWorkdays(getAct(3), 3);
+            if (I !== 'Foil Print' && getAct(3)) plans[7] = addWorkdays(getAct(3), 3); else if (getAct(6)) plans[7] = addWorkdays(getAct(6), 3);
+            if (getAct(7)) plans[8] = addWorkdays(getAct(7), 1);
             if (I === 'Screen print') { const condition = (G==='Magnetic' || F==='Paper Bag' || (G||'').startsWith('Sliding Handle')) || (G==='Magnetic' && isOffsetFoil && hasInner) || (G==='Magnetic' && hasInner); if(condition && getAct(8)) plans[9] = addWorkdays(getAct(8), 1); }
             const isTopBottom = G==='Top-Bottom'; const isSlidingBox = G==='Sliding Box'; const isMagnetic = G==='Magnetic'; const isSlidingHandle = G==='Sliding Handle Box'; const isPaperBag = F==='Paper Bag'; let targetDate10 = null; if (isPaperBag && isScreenPrint) targetDate10 = getAct(12); else if (isPaperBag && isOffsetFoil) targetDate10 = getAct(8); else if (isMagnetic && hasInner) targetDate10 = getAct(11); else if ((isMagnetic || isSlidingHandle) && isOffsetFoil) targetDate10 = getAct(8); else if (isMagnetic || isSlidingHandle) targetDate10 = getAct(12); else if (isTopBottom && hasInner) targetDate10 = getAct(11); else if (isTopBottom || isSlidingBox) targetDate10 = getAct(8); if (targetDate10) plans[10] = addWorkdays(targetDate10, 2);
             const base11 = getAct(10) || getAct(9) || getAct(8); if (base11 && hasInner) plans[11] = addWorkdays(base11, 1);
@@ -297,12 +301,22 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             const base13 = getAct(12) || getAct(11) || getAct(10); if (base13) plans[13] = addWorkdays(base13, 1);
             if (getAct(13)) plans[14] = addWorkdays(getAct(13), 1); if (getAct(14)) plans[15] = addWorkdays(getAct(14), 1); if (N) plans[16] = dayjs(N);
 
-            for (let s = 1; s <= 16; s++) { if (plans[s]) { const sqlDate = plans[s].isValid() ? plans[s].format('YYYY-MM-DD HH:mm:ss') : null; if(sqlDate) taskValues.push([jobId, s, sqlDate, 'Pending']); } }
+            for (let s = 1; s <= 16; s++) { 
+                if (plans[s]) { 
+                    const sqlDate = plans[s].isValid() ? plans[s].format('YYYY-MM-DD HH:mm:ss') : null; 
+                    if(sqlDate) taskValues.push([jobId, s, sqlDate, 'Pending']); 
+                } 
+            }
         }
 
-        // 4. Bulk Insert Tasks
+        // 4. Bulk Upsert Tasks with Conditional Update
         if(taskValues.length > 0) {
-            const taskSql = `INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) VALUES ? ON DUPLICATE KEY UPDATE plan_date=VALUES(plan_date)`;
+            // UPDATED Logic: If status is 'Completed', do NOT update the plan_date. 
+            // This effectively "moves to the next case" for steps that are already done.
+            const taskSql = `INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) 
+                            VALUES ? 
+                            ON DUPLICATE KEY UPDATE 
+                            plan_date = IF(status = 'Completed', plan_date, VALUES(plan_date))`;
             await db.query(taskSql, [taskValues]);
         }
         res.json({message: `Sync Complete. Processed ${rows.length} rows.`});
@@ -313,48 +327,29 @@ app.get('/fms/dibiaa-tasks', async (req, res) => { const { email, role } = req.q
 app.post('/fms/dibiaa-complete', async (req, res) => {
     const { task_id, delay_reason, contractor, printer, qty } = req.body;
     const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
-    
     const [t] = await db.query("SELECT plan_date FROM fms_dibiaa_tasks WHERE id=?", [task_id]);
-    
-    // FIX: Check if task exists
     if (!t || t.length === 0) return res.status(404).json({ message: "Task not found" });
-
     const plan = dayjs(t[0].plan_date);
     const delayHrs = dayjs().diff(plan, 'hour');
-    
     await db.query("UPDATE fms_dibiaa_tasks SET status='Completed', actual_date=?, delay_hours=?, delay_reason=?, custom_field_1=?, custom_field_2=? WHERE id=?", 
         [now, delayHrs > 0 ? delayHrs : 0, delay_reason, contractor || printer, qty, task_id]);
-    
     res.json({message: "Task Completed"});
 });
 app.get('/fms/dibiaa-config', async (req, res) => { const [r] = await db.query("SELECT * FROM fms_dibiaa_steps_config"); res.json(r); });
 app.post('/fms/dibiaa-config', async (req, res) => { const { step_id, doer_emails, visible_columns } = req.body; await db.query("UPDATE fms_dibiaa_steps_config SET doer_emails=?, visible_columns=? WHERE step_id=?", [doer_emails, visible_columns, step_id]); res.json({message: "Saved"}); });
 
-// =====================================================
-// === DEPLOYMENT CONFIGURATION (VERCEL) ===
-// =====================================================
-
-// 1. Serve Static Files from React Build
+// --- DEPLOYMENT CONFIG (VERCEL) ---
 app.use(express.static(path.join(__dirname, 'build')));
-
-// 2. Handle Catch-All Routing (FIXED: Uses Regex to avoid Vercel 500 Error)
 app.get(/.*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'build', 'index.html'));
 });
 
-// =====================================================
-// === SERVER STARTUP ===
-// =====================================================
-
+// --- SERVER STARTUP ---
 const PORT = process.env.PORT || 8800;
-
-// Only start the server if running locally
-// Vercel imports the app as a module, so it skips this block
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });
 }
 
-// Export app for Vercel
 module.exports = app;
