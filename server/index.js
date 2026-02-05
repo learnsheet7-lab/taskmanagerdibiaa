@@ -23,7 +23,7 @@ const db = mysql.createPool({
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
     waitForConnections: true,
-    connectionLimit: 10,
+    connectionLimit: 100,
     queueLimit: 0,
     enableKeepAlive: true,
     keepAliveInitialDelay: 0,
@@ -202,6 +202,31 @@ app.post('/checklist/upload', upload.single('file'), async (req, res) => {
         });
     } catch (e) {
         if (req.file) fs.unlinkSync(req.file.path);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// DELETE CHECKLIST TASK (Single or Bulk)
+app.delete('/checklist/:id', async (req, res) => {
+    const { id } = req.params;
+    const { deleteAll } = req.query; // true or false
+
+    try {
+        if (deleteAll === 'true') {
+            // Find the task details first to identify the "group"
+            const [task] = await db.query("SELECT description, employee_email FROM checklist_tasks WHERE id = ?", [id]);
+            if (task.length > 0) {
+                const { description, employee_email } = task[0];
+                // Delete all tasks with same description and email
+                await db.query("DELETE FROM checklist_tasks WHERE description = ? AND employee_email = ?", [description, employee_email]);
+                return res.json({ message: "All recurring tasks deleted" });
+            }
+        } else {
+            // Delete just this one
+            await db.query("DELETE FROM checklist_tasks WHERE id = ?", [id]);
+            return res.json({ message: "Task deleted" });
+        }
+    } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
