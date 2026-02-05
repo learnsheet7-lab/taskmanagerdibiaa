@@ -206,28 +206,37 @@ app.post('/checklist/upload', upload.single('file'), async (req, res) => {
     }
 });
 
-// DELETE CHECKLIST TASK (Single or Bulk)
+// DELETE CHECKLIST TASK (Corrected)
 app.delete('/checklist/:id', async (req, res) => {
     const { id } = req.params;
-    const { deleteAll } = req.query; // true or false
+    const { deleteAll } = req.query; 
 
     try {
         if (deleteAll === 'true') {
-            // Find the task details first to identify the "group"
-            const [task] = await db.query("SELECT description, employee_email FROM checklist_tasks WHERE id = ?", [id]);
-            if (task.length > 0) {
-                const { description, employee_email } = task[0];
-                // Delete all tasks with same description and email
+            // 1. Fetch the description and email to identify the group
+            const [rows] = await db.query("SELECT description, employee_email FROM checklist_tasks WHERE id = ?", [id]);
+            
+            if (rows && rows.length > 0) {
+                const { description, employee_email } = rows[0];
+                // 2. Delete the entire series
                 await db.query("DELETE FROM checklist_tasks WHERE description = ? AND employee_email = ?", [description, employee_email]);
                 return res.json({ message: "All recurring tasks deleted" });
+            } else {
+                // If not found, still respond so the frontend doesn't hang
+                return res.status(404).json({ message: "Task group not found" });
             }
         } else {
-            // Delete just this one
-            await db.query("DELETE FROM checklist_tasks WHERE id = ?", [id]);
+            // Delete only the single row
+            const [result] = await db.query("DELETE FROM checklist_tasks WHERE id = ?", [id]);
+            if (result.affectedRows === 0) {
+                return res.status(404).json({ message: "Individual task not found" });
+            }
             return res.json({ message: "Task deleted" });
         }
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error("Delete Error:", e);
+        // Important: Always send a 500 error if something crashes
+        return res.status(500).json({ error: e.message });
     }
 });
 
