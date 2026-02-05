@@ -118,21 +118,47 @@ app.get('/dashboard/:email/:role', async (req, res) => {
     }); 
 });
 
-// --- CHECKLIST MODULE (UPDATED) ---
-app.post('/checklist', async (req, res) => { const { description, employee_email, employee_name, frequency, start_date } = req.body; const [h] = await db.query("SELECT holiday_date FROM holidays"); const holidays = new Set(h.map(x=>x.holiday_date)); const tasks=[]; let c=dayjs(start_date); const end=dayjs().endOf('year'); while(c.isBefore(end)||c.isSame(end,'day')){const d=c.format('YYYY-MM-DD'); if((c.day()!==0||d===start_date)&&!holidays.has(d)) tasks.push(['CHK-'+Math.floor(Math.random()*1000),description,employee_email,employee_name,frequency,d,'Pending']); if(frequency==='Daily')c=c.add(1,'day');else if(frequency==='Weekly')c=c.add(1,'week');else if(frequency==='Monthly')c=c.add(1,'month');else if(frequency==='Quarterly')c=c.add(3,'month');else c=c.add(1,'year');} if(tasks.length>0){await db.query("INSERT INTO checklist_tasks (uid,description,employee_email,employee_name,frequency,target_date,status) VALUES ?", [tasks]); res.json({message:`Generated ${tasks.length}`});} else res.json({message:"No dates"}); });
+// --- CHECKLIST MODULE (FIXED EMAIL STORAGE) ---
+app.post('/checklist', async (req, res) => { 
+    // FIX: Destructure 'email' instead of 'employee_email' to match frontend payload
+    const { description, email, employee_name, frequency, start_date } = req.body; 
+    
+    const [h] = await db.query("SELECT holiday_date FROM holidays"); 
+    const holidays = new Set(h.map(x=>x.holiday_date)); 
+    const tasks=[]; 
+    let c=dayjs(start_date); 
+    const end=dayjs().endOf('year'); 
+    
+    while(c.isBefore(end)||c.isSame(end,'day')){
+        const d=c.format('YYYY-MM-DD'); 
+        if((c.day()!==0||d===start_date)&&!holidays.has(d)) {
+            // Mapping 'email' to the employee_email column position
+            tasks.push(['CHK-'+Math.floor(Math.random()*1000), description, email, employee_name, frequency, d, 'Pending']);
+        }
+        
+        if(frequency==='Daily') c=c.add(1,'day');
+        else if(frequency==='Weekly') c=c.add(1,'week');
+        else if(frequency==='Monthly') c=c.add(1,'month');
+        else if(frequency==='Quarterly') c=c.add(3,'month');
+        else c=c.add(1,'year');
+    } 
+    
+    if(tasks.length>0){
+        await db.query("INSERT INTO checklist_tasks (uid,description,employee_email,employee_name,frequency,target_date,status) VALUES ?", [tasks]); 
+        res.json({message:`Generated ${tasks.length}`});
+    } else res.json({message:"No dates"}); 
+});
 
-// FETCH CHECKLIST (UPDATED: Strictly excludes Completed tasks)
+// FETCH CHECKLIST
 app.get('/checklist/:email/:role', async (req, res) => { 
     const today = dayjs().format('YYYY-MM-DD'); 
     let q = "";
     let params = [];
     
     if (req.params.role === 'Admin') {
-        // Show all non-completed tasks that are due today or overdue
         q = "SELECT * FROM checklist_tasks WHERE status != 'Completed' AND target_date <= ? ORDER BY target_date ASC";
         params = [today];
     } else {
-        // Show user's specific non-completed tasks that are due today or overdue
         q = "SELECT * FROM checklist_tasks WHERE employee_email=? AND status != 'Completed' AND target_date <= ? ORDER BY target_date ASC";
         params = [req.params.email, today];
     }
@@ -206,27 +232,22 @@ app.post('/checklist/upload', upload.single('file'), async (req, res) => {
     }
 });
 
-// DELETE CHECKLIST TASK (Corrected)
+// DELETE CHECKLIST TASK
 app.delete('/checklist/:id', async (req, res) => {
     const { id } = req.params;
     const { deleteAll } = req.query; 
 
     try {
         if (deleteAll === 'true') {
-            // 1. Fetch the description and email to identify the group
             const [rows] = await db.query("SELECT description, employee_email FROM checklist_tasks WHERE id = ?", [id]);
-            
             if (rows && rows.length > 0) {
                 const { description, employee_email } = rows[0];
-                // 2. Delete the entire series
                 await db.query("DELETE FROM checklist_tasks WHERE description = ? AND employee_email = ?", [description, employee_email]);
                 return res.json({ message: "All recurring tasks deleted" });
             } else {
-                // If not found, still respond so the frontend doesn't hang
                 return res.status(404).json({ message: "Task group not found" });
             }
         } else {
-            // Delete only the single row
             const [result] = await db.query("DELETE FROM checklist_tasks WHERE id = ?", [id]);
             if (result.affectedRows === 0) {
                 return res.status(404).json({ message: "Individual task not found" });
@@ -235,7 +256,6 @@ app.delete('/checklist/:id', async (req, res) => {
         }
     } catch (e) {
         console.error("Delete Error:", e);
-        // Important: Always send a 500 error if something crashes
         return res.status(500).json({ error: e.message });
     }
 });
@@ -266,7 +286,7 @@ app.get('/mis/report', async (req, res) => {
     res.json(rows); 
 });
 
-// ================= DIBIAA FMS ENGINE (UPDATED SYNC LOGIC) =================
+// ================= DIBIAA FMS ENGINE =================
 app.post('/fms/sync-dibiaa', async (req, res) => {
     try {
         const SHEET_ID = '1C3qHR_jbjHgOQCM7MwRB4AZXtuY2W9jLpqIAEbYFWkQ';
@@ -278,7 +298,6 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
         const rows = response.data.values;
         if(!rows || rows.length === 0) return res.json({message: "No data found"});
 
-        // 1. Bulk Update Raw Table
         const rawValues = [];
         for(let i=0; i<rows.length; i++) {
             const r = rows[i];
@@ -288,7 +307,6 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             ]);
         }
         if(rawValues.length > 0) {
-            // Update all raw data fields if the row already exists
             const rawSql = `INSERT INTO fms_dibiaa_raw (sheet_row_index, timestamp, otd_type, job_number, order_by, company_name, box_type, box_style, box_color, printing_type, printing_color, specification, city, quantity, lead_time, repeat_new) 
                             VALUES ? 
                             ON DUPLICATE KEY UPDATE 
@@ -299,13 +317,11 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             await db.query(rawSql, [rawValues]);
         }
 
-        // 2. Fetch Maps for Task Logic
         const [jobs] = await db.query("SELECT job_id, sheet_row_index FROM fms_dibiaa_raw");
         const jobMap = {}; jobs.forEach(j => jobMap[j.sheet_row_index] = j.job_id);
         const [allTasks] = await db.query("SELECT job_id, step_id, actual_date FROM fms_dibiaa_tasks");
         const taskMap = {}; allTasks.forEach(t => taskMap[`${t.job_id}_${t.step_id}`] = t.actual_date ? dayjs(t.actual_date) : null);
 
-        // 3. Logic Engine
         const taskValues = [];
         for (let i = 0; i < rows.length; i++) {
             const r = rows[i]; const rowIndex = 2 + i; const jobId = jobMap[rowIndex];
@@ -343,10 +359,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             }
         }
 
-        // 4. Bulk Upsert Tasks with Conditional Update
         if(taskValues.length > 0) {
-            // UPDATED Logic: If status is 'Completed', do NOT update the plan_date. 
-            // This effectively "moves to the next case" for steps that are already done.
             const taskSql = `INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) 
                             VALUES ? 
                             ON DUPLICATE KEY UPDATE 
