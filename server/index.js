@@ -119,50 +119,50 @@ app.get('/dashboard/:email/:role', async (req, res) => {
 });
 
 // --- CHECKLIST MODULE (FIXED EMAIL STORAGE) ---
-app.post('/checklist', async (req, res) => {
-    // Destructure 'email' (from frontend payload)
-    const { description, email, employee_name, frequency, start_date } = req.body;
-
-    if (!email) return res.status(400).json({ message: "Email is required" });
-
-    const [h] = await db.query("SELECT holiday_date FROM holidays");
-    const holidays = new Set(h.map(x => dayjs(x.holiday_date).format('YYYY-MM-DD')));
+app.post('/checklist', async (req, res) => { 
+    // Destructure using employee_email
+    const { description, employee_email, employee_name, frequency, start_date } = req.body; 
     
-    const tasks = [];
-    let current = dayjs(start_date);
-    const endOfYear = dayjs().endOf('year');
+    console.log("Received Email:", employee_email); // Debugging line
+
+    const [h] = await db.query("SELECT holiday_date FROM holidays"); 
+    const holidays = new Set(h.map(x => dayjs(x.holiday_date).format('YYYY-MM-DD'))); 
+    
+    const tasks = []; 
+    let current = dayjs(start_date); 
+    const endOfYear = dayjs().endOf('year'); 
 
     while (current.isBefore(endOfYear) || current.isSame(endOfYear, 'day')) {
-        const formattedDate = current.format('YYYY-MM-DD');
+        const formattedDate = current.format('YYYY-MM-DD'); 
         const isSunday = current.day() === 0;
 
         if ((!isSunday || formattedDate === start_date) && !holidays.has(formattedDate)) {
             tasks.push([
-                'CHK-' + Math.floor(Math.random() * 1000000),
-                description,
-                email, // <--- This will now correctly populate the employee_email column
-                employee_name,
-                frequency,
-                formattedDate,
+                'CHK-' + Math.floor(Math.random() * 1000000), 
+                description, 
+                employee_email, // Index 2: matches column employee_email
+                employee_name, 
+                frequency, 
+                formattedDate, 
                 'Pending'
             ]);
         }
-
+        
         if (frequency === 'Daily') current = current.add(1, 'day');
         else if (frequency === 'Weekly') current = current.add(1, 'week');
         else if (frequency === 'Monthly') current = current.add(1, 'month');
         else if (frequency === 'Quarterly') current = current.add(3, 'month');
         else if (frequency === 'Yearly') current = current.add(1, 'year');
         else break;
-    }
+    } 
 
     if (tasks.length > 0) {
-        // Ensure the column name here is 'employee_email'
+        // Ensure column order here matches the tasks.push order exactly
         const sql = "INSERT INTO checklist_tasks (uid, description, employee_email, employee_name, frequency, target_date, status) VALUES ?";
-        await db.query(sql, [tasks]);
+        await db.query(sql, [tasks]); 
         res.json({ message: `Generated ${tasks.length} tasks` });
     } else {
-        res.json({ message: "No dates to process" });
+        res.json({ message: "No tasks generated" });
     }
 });
 
