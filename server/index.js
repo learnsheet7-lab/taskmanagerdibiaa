@@ -227,22 +227,33 @@ app.get('/fms/track/:job_number', async (req, res) => {
 });
 
 // 2. FMS Status Summary Report
+// 2. FMS Status Summary Report - CORRECTED DELAY LOGIC
 app.get('/fms/report-summary', async (req, res) => {
     const { start, end } = req.query;
     const sql = `
         SELECT 
             s.step_name,
-            COUNT(t.id) as Total,
-            SUM(CASE WHEN t.status = 'Pending' THEN 1 ELSE 0 END) as Pending,
-            SUM(CASE WHEN t.status = 'Completed' THEN 1 ELSE 0 END) as Completed,
-            SUM(CASE WHEN t.status = 'Pending' AND t.plan_date < NOW() THEN 1 ELSE 0 END) as Delayed
+            COUNT(t.id) as \`Total\`,
+            SUM(CASE WHEN t.status = 'Pending' THEN 1 ELSE 0 END) as \`Pending\`,
+            SUM(CASE WHEN t.status = 'Completed' THEN 1 ELSE 0 END) as \`Completed\`,
+            SUM(CASE 
+                WHEN t.status = 'Completed' AND t.actual_date > t.plan_date THEN 1 
+                WHEN t.status = 'Pending' AND t.plan_date < NOW() THEN 1 
+                ELSE 0 
+            END) as \`Delayed\`
         FROM fms_dibiaa_tasks t
         JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
         WHERE t.plan_date BETWEEN ? AND ?
         GROUP BY s.step_id, s.step_name
         ORDER BY s.step_id ASC`;
-    const [rows] = await db.query(sql, [start, end]);
-    res.json(rows);
+    
+    try {
+        const [rows] = await db.query(sql, [start, end]);
+        res.json(rows);
+    } catch (error) {
+        console.error("SQL Error in FMS Report:", error);
+        res.status(500).json({ error: "Internal Server Error", details: error.message });
+    }
 });
 
 // --- UPLOADS ---
