@@ -87,34 +87,46 @@ app.delete('/users/:id', async (req, res) => { await db.query("DELETE FROM users
 app.post('/users/change-password-secure', async (req, res) => { const { id, currentPassword, newPassword } = req.body; const [u] = await db.query("SELECT * FROM users WHERE id=? AND password=?", [id, currentPassword]); if(u.length === 0) return res.status(401).json({message: "Current password incorrect"}); await db.query("UPDATE users SET password=? WHERE id=?", [newPassword, id]); res.json({message: "Password Changed"}); });
 
 // --- DASHBOARD ---
+// --- UPDATED DASHBOARD ROUTE ---
 app.get('/dashboard/:email/:role', async (req, res) => { 
-    const {email,role}=req.params; const today = dayjs().format('YYYY-MM-DD');
+    const { email, role } = req.params;
+    const { filterEmail } = req.query; // Admin selects from dropdown
+    const today = dayjs().format('YYYY-MM-DD');
 
-    const base=role==='Admin'?"":`WHERE assigned_to_email='${email}'`; const and=role==='Admin'?"WHERE":"AND";
-    const [delPending]=await db.query(`SELECT COUNT(*) c FROM tasks ${base} ${and} status IN ('Pending','Revision Requested','Waiting Approval')`);
-    const [delRevised]=await db.query(`SELECT COUNT(*) c FROM tasks ${base} ${and} status IN ('Revised', 'Revision Requested')`);
-    const [delCompleted]=await db.query(`SELECT COUNT(*) c FROM tasks ${base} ${and} status='Completed'`);
-    const [delToday]=await db.query(`SELECT * FROM tasks ${base} ${and} target_date <= '${today}' AND status!='Completed' ORDER BY target_date ASC`);
+    // If Admin selects a user, target that user's email. Otherwise use standard logic.
+    const targetEmail = (role === 'Admin' && filterEmail) ? filterEmail : email;
     
-    const chkBase=role==='Admin'?"":`WHERE employee_email='${email}'`; const chkAnd=role==='Admin'?"WHERE":"AND";
-    const [chkTotal]=await db.query(`SELECT COUNT(*) c FROM checklist_tasks ${chkBase} ${chkAnd} target_date <= '${today}'`);
-    const [chkPending]=await db.query(`SELECT COUNT(*) c FROM checklist_tasks ${chkBase} ${chkAnd} target_date <= '${today}' AND status='Pending'`);
-    const [chkCompleted]=await db.query(`SELECT COUNT(*) c FROM checklist_tasks ${chkBase} ${chkAnd} target_date <= '${today}' AND status='Completed'`);
-    const [chkTodayTasks]=await db.query(`SELECT * FROM checklist_tasks ${chkBase} ${chkAnd} target_date <= '${today}' AND status='Pending' ORDER BY target_date ASC`);
+    // Determine if we are viewing "All" (Admin with no filter) or a specific person
+    const isFiltered = (role === 'Admin' && !filterEmail) ? false : true;
 
-    let fmsBase = "SELECT t.*, r.job_number, r.company_name FROM fms_dibiaa_tasks t JOIN fms_dibiaa_raw r ON t.job_id=r.job_id JOIN fms_dibiaa_steps_config s ON t.step_id=s.step_id WHERE 1=1";
-    if(role !== 'Admin') { const [mySteps] = await db.query("SELECT step_id FROM fms_dibiaa_steps_config WHERE doer_emails LIKE ?", [`%${email}%`]); const ids = mySteps.map(s=>s.step_id).join(',') || '0'; fmsBase += ` AND t.step_id IN (${ids})`; }
+    const base = !isFiltered ? "" : `WHERE assigned_to_email='${targetEmail}'`; 
+    const and = !isFiltered ? "WHERE" : "AND";
+
+    const [delPending] = await db.query(`SELECT COUNT(*) c FROM tasks ${base} ${and} status IN ('Pending','Revision Requested','Waiting Approval')`);
+    const [delRevised] = await db.query(`SELECT COUNT(*) c FROM tasks ${base} ${and} status IN ('Revised', 'Revision Requested')`);
+    const [delCompleted] = await db.query(`SELECT COUNT(*) c FROM tasks ${base} ${and} status='Completed'`);
+    const [delToday] = await db.query(`SELECT * FROM tasks ${base} ${and} target_date <= '${today}' AND status!='Completed' ORDER BY target_date ASC`);
+    
+    const chkBase = !isFiltered ? "" : `WHERE employee_email='${targetEmail}'`; 
+    const chkAnd = !isFiltered ? "WHERE" : "AND";
+    const [chkTotal] = await db.query(`SELECT COUNT(*) c FROM checklist_tasks ${chkBase} ${chkAnd} target_date <= '${today}'`);
+    const [chkPending] = await db.query(`SELECT COUNT(*) c FROM checklist_tasks ${chkBase} ${chkAnd} target_date <= '${today}' AND status='Pending'`);
+    const [chkCompleted] = await db.query(`SELECT COUNT(*) c FROM checklist_tasks ${chkBase} ${chkAnd} target_date <= '${today}' AND status='Completed'`);
+    
+    // FMS Logic
+    let fmsBase = "SELECT t.*, r.job_number, r.company_name FROM fms_dibiaa_tasks t JOIN fms_dibiaa_raw r ON t.job_id=r.job_id WHERE 1=1";
+    if(isFiltered) { 
+        // Filter FMS by steps assigned to this user's email
+        const [mySteps] = await db.query("SELECT step_id FROM fms_dibiaa_steps_config WHERE doer_emails LIKE ?", [`%${targetEmail}%`]); 
+        const ids = mySteps.map(s=>s.step_id).join(',') || '0'; 
+        fmsBase += ` AND t.step_id IN (${ids})`; 
+    }
     const [fmsAll] = await db.query(fmsBase);
-    const fmsTotal = fmsAll.length; const fmsPending = fmsAll.filter(t=>t.status==='Pending').length; const fmsCompleted = fmsAll.filter(t=>t.status==='Completed').length;
-    const fmsToday = fmsAll.filter(t => {
-        if (!t.plan_date || t.status !== 'Pending') return false;
-        return dayjs(t.plan_date).isBefore(dayjs().endOf('day'));
-    });
 
     res.json({
         delegation: { pending: delPending[0].c, revised: delRevised[0].c, completed: delCompleted[0].c, today: delToday },
-        checklist: { pending: chkPending[0].c, total: chkTotal[0].c, completed: chkCompleted[0].c, today: chkTodayTasks },
-        fms: { pending: fmsPending, total: fmsTotal, completed: fmsCompleted, today: fmsToday }
+        checklist: { pending: chkPending[0].c, total: chkTotal[0].c, completed: chkCompleted[0].c },
+        fms: { pending: fmsAll.filter(t=>t.status==='Pending').length, total: fmsAll.length, completed: fmsAll.filter(t=>t.status==='Completed').length }
     }); 
 });
 
@@ -199,6 +211,39 @@ app.get('/holidays', async (req, res) => { const [r] = await db.query("SELECT * 
 app.post('/holidays', async (req, res) => { await db.query("INSERT INTO holidays (holiday_date, name) VALUES (?,?)", [req.body.date, req.body.name]); res.json({message:"Added"}); });
 app.get('/mis/tasks', async (req, res) => { const [rows]=await db.query("SELECT description,target_date,status,completed_at FROM tasks WHERE assigned_to_email=? AND target_date BETWEEN ? AND ? ORDER BY target_date",[req.query.email,req.query.start,req.query.end]); res.json(rows); });
 app.post('/mis/plan', async (req, res) => { const {email,date,count}=req.body; const [ex]=await db.query("SELECT id FROM employee_plans WHERE employee_email=? AND plan_date=?",[email,date]); if(ex.length>0) await db.query("UPDATE employee_plans SET planned_count=? WHERE id=?",[count,ex[0].id]); else await db.query("INSERT INTO employee_plans (employee_email,plan_date,planned_count) VALUES (?,?,?)",[email,date,count]); res.json({message:"Saved"}); });
+
+// 1. FMS Task Tracker by Job Number
+app.get('/fms/track/:job_number', async (req, res) => {
+    const { job_number } = req.params;
+    const sql = `
+        SELECT t.status, t.actual_date as actual_time, s.step_name 
+        FROM fms_dibiaa_tasks t
+        JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
+        JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
+        WHERE r.job_number = ?
+        ORDER BY t.step_id ASC`;
+    const [rows] = await db.query(sql, [job_number]);
+    res.json(rows);
+});
+
+// 2. FMS Status Summary Report
+app.get('/fms/report-summary', async (req, res) => {
+    const { start, end } = req.query;
+    const sql = `
+        SELECT 
+            s.step_name,
+            COUNT(t.id) as Total,
+            SUM(CASE WHEN t.status = 'Pending' THEN 1 ELSE 0 END) as Pending,
+            SUM(CASE WHEN t.status = 'Completed' THEN 1 ELSE 0 END) as Completed,
+            SUM(CASE WHEN t.status = 'Pending' AND t.plan_date < NOW() THEN 1 ELSE 0 END) as Delayed
+        FROM fms_dibiaa_tasks t
+        JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
+        WHERE t.plan_date BETWEEN ? AND ?
+        GROUP BY s.step_id, s.step_name
+        ORDER BY s.step_id ASC`;
+    const [rows] = await db.query(sql, [start, end]);
+    res.json(rows);
+});
 
 // --- UPLOADS ---
 app.post('/tasks/upload', upload.single('file'), async (req, res) => { if (!req.file) return res.status(400).json({ message: "No file uploaded" }); try { const results = []; fs.createReadStream(req.file.path).pipe(csv()).on('data', (data) => results.push(data)).on('end', async () => { const [users] = await db.query("SELECT email, name FROM users"); const bulkTasks = []; const assignedBy = req.body.assigned_by || 'Admin Upload'; for (const row of results) { const empName = users.find(u => u.email === row.employee_email)?.name || row.employee_email; const tDate = parseToMySQLDate(row.target_date); if(tDate) { bulkTasks.push(['T-'+Math.floor(Math.random()*90000), empName, row.employee_email, row.approver_email, row.description, tDate, row.priority || 'Medium', row.approval_needed || 'No', assignedBy, row.remarks || '', 'Pending', 'Pending']); } } if (bulkTasks.length > 0) { await db.query("INSERT INTO tasks (task_uid,employee_name,assigned_to_email,approver_email,description,target_date,priority,approval_needed,assigned_by,remarks,status,previous_status) VALUES ?", [bulkTasks]); } fs.unlinkSync(req.file.path); res.json({ message: `Delegated ${bulkTasks.length} tasks.` }); }); } catch (e) { res.status(500).json({ error: e.message }); } });
