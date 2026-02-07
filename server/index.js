@@ -419,8 +419,8 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             if (I === 'Foil Print' && getAct(3)) plans[6] = addWorkdays(getAct(3), 3);
             if (I !== 'Foil Print' && getAct(3)) plans[7] = addWorkdays(getAct(3), 3); else if (getAct(6)) plans[7] = addWorkdays(getAct(6), 3);
             if (getAct(7)) plans[8] = addWorkdays(getAct(7), 1); //full kitting step
-            if (I === 'Screen print') { 
-            const condition = (G==='Magnetic' || (G||'').startsWith('Sliding Handle')) || (G==='Magnetic' && isOffsetFoil && hasInner) || (G==='Magnetic' && hasInner); 
+            if (getAct(8)) { 
+            const condition = (G==='Magnetic' || (G||'').startsWith('Sliding Handle') && I === 'Screen print') || (G==='Magnetic' && isOffsetFoil && hasInner) || (G==='Magnetic' && hasInner && I === 'Screen print'); 
             if(condition && getAct(8)) plans[9] = addWorkdays(getAct(8), 1); } //partial making ok
             const isTopBottom = G==='Top-Bottom'; 
             const isSlidingBox = G==='Sliding Box'; 
