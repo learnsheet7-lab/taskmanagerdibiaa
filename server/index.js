@@ -556,6 +556,45 @@ app.post('/fms/dibiaa-complete', async (req, res) => {
         res.status(500).json({ error: "Internal Server Error" });
     }
 });
+
+app.get('/mis/checklist-report', async (req, res) => {
+    const { start, end } = req.query;
+    const today = dayjs().format('YYYY-MM-DD');
+
+    const sql = `
+        SELECT 
+            employee_name, 
+            employee_email,
+            COUNT(id) as total_task,
+            SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) as total_pending,
+            SUM(CASE WHEN status = 'Completed' THEN 1 ELSE 0 END) as total_completed,
+            SUM(CASE 
+                WHEN (status = 'Pending' AND target_date < ?) OR (status = 'Completed' AND DATE(completed_at) > target_date) 
+                THEN 1 ELSE 0 
+            END) as total_delayed
+        FROM checklist_tasks
+        WHERE target_date BETWEEN ? AND ?
+        GROUP BY employee_email, employee_name
+        HAVING total_task > 0`;
+
+    try {
+        const [rows] = await db.query(sql, [today, start, end]);
+        res.json(rows);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Endpoint for Checklist Detail Popup
+app.get('/mis/checklist-tasks', async (req, res) => {
+    const { email, start, end } = req.query;
+    const [rows] = await db.query(
+        "SELECT description, target_date, status, completed_at FROM checklist_tasks WHERE employee_email=? AND target_date BETWEEN ? AND ? ORDER BY target_date",
+        [email, start, end]
+    );
+    res.json(rows);
+});
+
 app.get('/fms/dibiaa-config', async (req, res) => { const [r] = await db.query("SELECT * FROM fms_dibiaa_steps_config"); res.json(r); });
 app.post('/fms/dibiaa-config', async (req, res) => { const { step_id, doer_emails, visible_columns } = req.body; await db.query("UPDATE fms_dibiaa_steps_config SET doer_emails=?, visible_columns=? WHERE step_id=?", [doer_emails, visible_columns, step_id]); res.json({message: "Saved"}); });
 
