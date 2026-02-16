@@ -114,7 +114,8 @@ app.get('/dashboard/:email/:role', async (req, res) => {
     const [chkCompleted] = await db.query(`SELECT COUNT(*) c FROM checklist_tasks ${chkBase} ${chkAnd} target_date <= '${today}' AND status='Completed'`);
     
     // FMS Logic
-    let fmsBase = "SELECT t.*, r.job_number, r.company_name FROM fms_dibiaa_tasks t JOIN fms_dibiaa_raw r ON t.job_id=r.job_id WHERE 1=1";
+    // Updated FMS Logic in /dashboard route
+let fmsBase = "SELECT t.*, r.job_number, r.company_name, t.custom_field_1, t.custom_field_2 FROM fms_dibiaa_tasks t JOIN fms_dibiaa_raw r ON t.job_id=r.job_id WHERE 1=1";
     if(isFiltered) { 
         // Filter FMS by steps assigned to this user's email
         const [mySteps] = await db.query("SELECT step_id FROM fms_dibiaa_steps_config WHERE doer_emails LIKE ?", [`%${targetEmail}%`]); 
@@ -480,17 +481,66 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
     } catch(e) { console.error("Sync Error:", e); res.status(500).json({error: e.message}); }
 });
 
-app.get('/fms/dibiaa-tasks', async (req, res) => { const { email, role } = req.query; const [configs] = await db.query("SELECT * FROM fms_dibiaa_steps_config"); const relevantSteps = role === 'Admin' ? configs : configs.filter(c => c.doer_emails && c.doer_emails.includes(email)); const stepIds = relevantSteps.map(s => s.step_id); if (stepIds.length === 0) return res.json({}); const [tasks] = await db.query(`SELECT t.*, r.job_number, r.company_name, r.box_type, r.quantity, r.quantity as total_qty, s.step_name, s.visible_columns, r.timestamp, r.otd_type, r.order_by, r.box_style, r.box_color, r.printing_type, r.printing_color, r.specification, r.city, r.lead_time, r.repeat_new FROM fms_dibiaa_tasks t JOIN fms_dibiaa_raw r ON t.job_id = r.job_id JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id WHERE t.status = 'Pending' AND t.step_id IN (?) ORDER BY t.plan_date ASC`, [stepIds]); const grouped = {}; relevantSteps.forEach(s => { const stepTasks = tasks.filter(t => t.step_id === s.step_id); if (stepTasks.length > 0) grouped[s.step_name] = stepTasks; }); res.json(grouped); });
+app.get('/fms/dibiaa-tasks', async (req, res) => {
+    const { email, role } = req.query;
+    const [configs] = await db.query("SELECT * FROM fms_dibiaa_steps_config");
+    const relevantSteps = role === 'Admin' ? configs : configs.filter(c => c.doer_emails && c.doer_emails.includes(email));
+    const stepIds = relevantSteps.map(s => s.step_id);
+    
+    if (stepIds.length === 0) return res.json({});
+
+    // Added t.custom_field_1 and t.custom_field_2 to the SELECT
+    const [tasks] = await db.query(`
+        SELECT t.*, r.job_number, r.company_name, r.box_type, r.quantity as total_qty, 
+               s.step_name, s.visible_columns, r.timestamp, t.custom_field_1, t.custom_field_2
+        FROM fms_dibiaa_tasks t 
+        JOIN fms_dibiaa_raw r ON t.job_id = r.job_id 
+        JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id 
+        WHERE t.step_id IN (?) 
+        ORDER BY t.plan_date ASC`, [stepIds]);
+
+    const grouped = {};
+    relevantSteps.forEach(s => {
+        // You can choose to show all or just pending. 
+        // For verification, let's keep it showing all for now or check tracker.
+        const stepTasks = tasks.filter(t => t.step_id === s.step_id);
+        if (stepTasks.length > 0) grouped[s.step_name] = stepTasks;
+    });
+    res.json(grouped);
+});
 app.post('/fms/dibiaa-complete', async (req, res) => {
     const { task_id, delay_reason, contractor, printer, qty } = req.body;
     const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
-    const [t] = await db.query("SELECT plan_date FROM fms_dibiaa_tasks WHERE id=?", [task_id]);
-    if (!t || t.length === 0) return res.status(404).json({ message: "Task not found" });
-    const plan = dayjs(t[0].plan_date);
-    const delayHrs = dayjs().diff(plan, 'hour');
-    await db.query("UPDATE fms_dibiaa_tasks SET status='Completed', actual_date=?, delay_hours=?, delay_reason=?, custom_field_1=?, custom_field_2=? WHERE id=?", 
-        [now, delayHrs > 0 ? delayHrs : 0, delay_reason, contractor || printer, qty, task_id]);
-    res.json({message: "Task Completed"});
+
+    try {
+        // 1. Fetch plan date to calculate delay
+        const [t] = await db.query("SELECT plan_date FROM fms_dibiaa_tasks WHERE id=?", [task_id]);
+        if (!t || t.length === 0) return res.status(404).json({ message: "Task not found" });
+
+        const plan = dayjs(t[0].plan_date);
+        const delayHrs = dayjs().diff(plan, 'hour');
+
+        // 2. Determine which name to save (Contractor or Printer)
+        const workerName = contractor || printer || '';
+
+        // 3. Update database with ALL fields
+        await db.query(
+            "UPDATE fms_dibiaa_tasks SET status='Completed', actual_date=?, delay_hours=?, delay_reason=?, custom_field_1=?, custom_field_2=? WHERE id=?", 
+            [
+                now, 
+                delayHrs > 0 ? delayHrs : 0, 
+                delay_reason || '', 
+                workerName, 
+                qty || null, 
+                task_id
+            ]
+        );
+
+        res.json({ message: "Task Completed" });
+    } catch (error) {
+        console.error("Error completing FMS task:", error);
+        res.status(500).json({ error: "Internal Server Error" });
+    }
 });
 app.get('/fms/dibiaa-config', async (req, res) => { const [r] = await db.query("SELECT * FROM fms_dibiaa_steps_config"); res.json(r); });
 app.post('/fms/dibiaa-config', async (req, res) => { const { step_id, doer_emails, visible_columns } = req.body; await db.query("UPDATE fms_dibiaa_steps_config SET doer_emails=?, visible_columns=? WHERE step_id=?", [doer_emails, visible_columns, step_id]); res.json({message: "Saved"}); });
