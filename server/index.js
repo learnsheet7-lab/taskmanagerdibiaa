@@ -482,17 +482,16 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
 });
 
 app.get('/fms/dibiaa-tasks', async (req, res) => {
-    const { email, role } = req.query;
-    const [configs] = await db.query("SELECT * FROM fms_dibiaa_steps_config");
-    const relevantSteps = role === 'Admin' ? configs : configs.filter(c => c.doer_emails && c.doer_emails.includes(email));
-    const stepIds = relevantSteps.map(s => s.step_id);
+    // ... (keep your existing config and stepIds logic)
     
-    if (stepIds.length === 0) return res.json({});
-
-    // Added t.custom_field_1 and t.custom_field_2 to the SELECT
+    // Explicitly selecting custom fields to ensure they are in the JSON response
     const [tasks] = await db.query(`
-        SELECT t.*, r.job_number, r.company_name, r.box_type, r.quantity as total_qty, 
-               s.step_name, s.visible_columns, r.timestamp, t.custom_field_1, t.custom_field_2
+        SELECT t.id, t.job_id, t.step_id, t.plan_date, t.status, t.actual_date, 
+               t.custom_field_1, t.custom_field_2, 
+               r.job_number, r.company_name, r.box_type, r.quantity as total_qty, 
+               s.step_name, s.visible_columns, r.timestamp, r.otd_type, r.order_by, 
+               r.box_style, r.box_color, r.printing_type, r.printing_color, 
+               r.specification, r.city, r.lead_time, r.repeat_new 
         FROM fms_dibiaa_tasks t 
         JOIN fms_dibiaa_raw r ON t.job_id = r.job_id 
         JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id 
