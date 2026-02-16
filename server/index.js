@@ -495,18 +495,20 @@ app.get('/fms/dibiaa-tasks', async (req, res) => {
 
         // CRITICAL CHANGE: We JOIN tasks (t) with raw (r) using job_id
         const [tasks] = await db.query(`
-            SELECT 
-                t.*, 
-                r.job_number, r.company_name, r.box_type, r.quantity as total_qty, 
-                r.timestamp, r.otd_type, r.order_by, r.box_style, r.box_color, 
-                r.printing_type, r.printing_color, r.specification, r.city, 
-                r.lead_time, r.repeat_new,
-                s.step_name, s.visible_columns
-            FROM fms_dibiaa_tasks t 
-            JOIN fms_dibiaa_raw r ON t.job_id = r.job_id 
-            JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id 
-            WHERE t.status = 'Pending' AND t.step_id IN (?) 
-            ORDER BY t.plan_date ASC`, [stepIds]); 
+    SELECT 
+        t.*, 
+        r.job_number, r.company_name, r.box_type, r.quantity as total_qty, 
+        r.timestamp, r.otd_type, r.order_by, r.box_style, r.box_color, 
+        r.printing_type, r.printing_color, r.specification, r.city, 
+        r.lead_time, r.repeat_new,
+        s.step_name, s.visible_columns,
+        (SELECT custom_field_1 FROM fms_dibiaa_tasks WHERE job_id = t.job_id AND (custom_field_1 IS NOT NULL AND custom_field_1 != '') ORDER BY actual_date DESC LIMIT 1) as latest_worker,
+        (SELECT custom_field_2 FROM fms_dibiaa_tasks WHERE job_id = t.job_id AND (custom_field_2 IS NOT NULL AND custom_field_2 != '') ORDER BY actual_date DESC LIMIT 1) as latest_qty
+    FROM fms_dibiaa_tasks t 
+    JOIN fms_dibiaa_raw r ON t.job_id = r.job_id 
+    JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id 
+    WHERE t.status = 'Pending' AND t.step_id IN (?) 
+    ORDER BY t.plan_date ASC`, [stepIds]);
 
         const grouped = {}; 
         relevantSteps.forEach(s => { 
