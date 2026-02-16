@@ -481,32 +481,51 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
     } catch(e) { console.error("Sync Error:", e); res.status(500).json({error: e.message}); }
 });
 
-app.get('/fms/dibiaa-tasks', async (req, res) => {
-    // ... (keep your existing config and stepIds logic)
-    
-    // Explicitly selecting custom fields to ensure they are in the JSON response
-    const [tasks] = await db.query(`
-        SELECT t.id, t.job_id, t.step_id, t.plan_date, t.status, t.actual_date, 
-               t.custom_field_1, t.custom_field_2, 
-               r.job_number, r.company_name, r.box_type, r.quantity as total_qty, 
-               s.step_name, s.visible_columns, r.timestamp, r.otd_type, r.order_by, 
-               r.box_style, r.box_color, r.printing_type, r.printing_color, 
-               r.specification, r.city, r.lead_time, r.repeat_new 
-        FROM fms_dibiaa_tasks t 
-        JOIN fms_dibiaa_raw r ON t.job_id = r.job_id 
-        JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id 
-        WHERE t.step_id IN (?) 
-        ORDER BY t.plan_date ASC`, [stepIds]);
+app.get('/fms/dibiaa-tasks', async (req, res) => { 
+    try {
+        const { email, role } = req.query; 
+        
+        // 1. Fetch configs first
+        const [configs] = await db.query("SELECT * FROM fms_dibiaa_steps_config"); 
+        
+        // 2. Filter steps based on role
+        const relevantSteps = role === 'Admin' 
+            ? configs 
+            : configs.filter(c => c.doer_emails && c.doer_emails.includes(email)); 
+        
+        // 3. Define stepIds
+        const stepIds = relevantSteps.map(s => s.step_id); 
 
-    const grouped = {};
-    relevantSteps.forEach(s => {
-        // You can choose to show all or just pending. 
-        // For verification, let's keep it showing all for now or check tracker.
-        const stepTasks = tasks.filter(t => t.step_id === s.step_id);
-        if (stepTasks.length > 0) grouped[s.step_name] = stepTasks;
-    });
-    res.json(grouped);
+        // 4. Check if we have steps to query
+        if (stepIds.length === 0) return res.json({}); 
+
+        // 5. Run the query using stepIds (Added custom_field selection here)
+        const [tasks] = await db.query(`
+            SELECT t.*, r.job_number, r.company_name, r.box_type, r.quantity as total_qty, 
+                   s.step_name, s.visible_columns, r.timestamp, r.otd_type, r.order_by, 
+                   r.box_style, r.box_color, r.printing_type, r.printing_color, 
+                   r.specification, r.city, r.lead_time, r.repeat_new,
+                   t.custom_field_1, t.custom_field_2
+            FROM fms_dibiaa_tasks t 
+            JOIN fms_dibiaa_raw r ON t.job_id = r.job_id 
+            JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id 
+            WHERE t.status = 'Pending' AND t.step_id IN (?) 
+            ORDER BY t.plan_date ASC`, [stepIds]); 
+
+        // 6. Group the results
+        const grouped = {}; 
+        relevantSteps.forEach(s => { 
+            const stepTasks = tasks.filter(t => t.step_id === s.step_id); 
+            if (stepTasks.length > 0) grouped[s.step_name] = stepTasks; 
+        }); 
+
+        res.json(grouped); 
+    } catch (err) {
+        console.error("FMS Task Fetch Error:", err);
+        res.status(500).json({ error: err.message });
+    }
 });
+
 app.post('/fms/dibiaa-complete', async (req, res) => {
     const { task_id, delay_reason, contractor, printer, qty } = req.body;
     const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
