@@ -4,7 +4,15 @@ const mysql = require('mysql2/promise');
 const cors = require('cors');
 const dayjs = require('dayjs'); 
 const customParseFormat = require('dayjs/plugin/customParseFormat');
+const timezone = require('dayjs/plugin/timezone'); // Add this
+const utc = require('dayjs/plugin/utc');           // Add this
+
 dayjs.extend(customParseFormat);
+dayjs.extend(utc);      // Add this
+dayjs.extend(timezone); // Add this
+
+// Set default timezone to IST
+dayjs.tz.setDefault("Asia/Kolkata");
 const { google } = require('googleapis'); 
 const fs = require('fs');
 const path = require('path'); 
@@ -59,22 +67,30 @@ const parseToMySQLDate = (d) => {
 };
 const parseDate = (d) => {
     if (!d) return null;
-    const dt = dayjs(d.toString().trim(), ['DD/MM/YYYY HH:mm:ss', 'YYYY-MM-DD HH:mm:ss', 'DD/MM/YYYY', 'YYYY-MM-DD'], true);
+    // Parse as IST specifically
+    const dt = dayjs.tz(d.toString().trim(), ['DD/MM/YYYY HH:mm:ss', 'YYYY-MM-DD HH:mm:ss'], "Asia/Kolkata");
     return dt.isValid() ? dt : null;
 };
 const addWorkdays = (startDate, days) => {
     if (!startDate) return null;
-    let d = dayjs(startDate);
+    // Ensure we are working with an IST dayjs object
+    let d = dayjs.tz(startDate, "Asia/Kolkata");
     if (!d.isValid()) return null;
+
     let added = 0;
-    while (added < Math.floor(days)) {
+    while (added < days) {
         d = d.add(1, 'day');
-        if (d.day() !== 0) added++; 
+        // Check if the day is NOT Sunday (0)
+        if (d.day() !== 0) {
+            added++;
+        }
     }
-    if (days % 1 !== 0) d = d.add((days % 1) * 24, 'hour');
-    if (d.day() === 0) d = d.add(1, 'day').hour(9).minute(0).second(0);
-    if (d.hour() < 9) d = d.hour(9);
-    if (d.hour() >= 18) d = d.add(1, 'day').hour(9);
+    
+    // If the resulting day is a Sunday, push it to Monday but KEEP the time
+    if (d.day() === 0) {
+        d = d.add(1, 'day');
+    }
+    
     return d;
 };
 
@@ -525,6 +541,8 @@ app.get('/fms/dibiaa-tasks', async (req, res) => {
 app.post('/fms/dibiaa-complete', async (req, res) => {
     const { task_id, delay_reason, contractor, printer, qty } = req.body;
     const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
+    // Explicitly get the current time in IST
+    const nowIST = dayjs().tz("Asia/Kolkata").format('YYYY-MM-DD HH:mm:ss');
 
     try {
         // 1. Fetch plan date to calculate delay
@@ -539,18 +557,11 @@ app.post('/fms/dibiaa-complete', async (req, res) => {
 
         // 3. Update database with ALL fields
         await db.query(
-            "UPDATE fms_dibiaa_tasks SET status='Completed', actual_date=?, delay_hours=?, delay_reason=?, custom_field_1=?, custom_field_2=? WHERE id=?", 
-            [
-                now, 
-                delayHrs > 0 ? delayHrs : 0, 
-                delay_reason || '', 
-                workerName, 
-                qty || null, 
-                task_id
-            ]
-        );
+        "UPDATE fms_dibiaa_tasks SET status='Completed', actual_date=?, delay_hours=?, delay_reason=?, custom_field_1=?, custom_field_2=? WHERE id=?", 
+        [nowIST, delayHrs > 0 ? delayHrs : 0, delay_reason, contractor || printer, qty, task_id]
+    );
+    res.json({message: "Task Completed"});
 
-        res.json({ message: "Task Completed" });
     } catch (error) {
         console.error("Error completing FMS task:", error);
         res.status(500).json({ error: "Internal Server Error" });
