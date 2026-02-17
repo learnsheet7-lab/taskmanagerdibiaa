@@ -637,40 +637,51 @@ app.get('/fms/rolling-report', async (req, res) => {
 });
 
 app.post('/fms/pc-summary', async (req, res) => {
-    const { start, end, clients, steps, jobNumbers, statuses } = req.body;
-    let params = [start, end];
-    
-    let whereClause = `
-        WHERE t.plan_date BETWEEN ? AND ? 
-        AND (t.actual_date IS NULL OR t.actual_date = '')
-    `;
-
-    if (clients && clients.length > 0) { whereClause += " AND r.company_name IN (?)"; params.push(clients); }
-    if (steps && steps.length > 0) { whereClause += " AND s.step_name IN (?)"; params.push(steps); }
-    if (jobNumbers && jobNumbers.length > 0) { whereClause += " AND r.job_number IN (?)"; params.push(jobNumbers); }
-
-    const sql = `
-        SELECT 
-            r.job_number, 
-            r.order_by, 
-            t.plan_date, 
-            u.name as doer_name, -- Fetching actual name from users table
-            r.company_name, 
-            s.step_name, 
-            r.box_type, 
-            r.box_style, 
-            r.quantity, 
-            r.city
-        FROM fms_dibiaa_tasks t
-        JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
-        JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
-        LEFT JOIN users u ON t.employee_email = u.email -- Joining to get the Doer Name
-        ${whereClause}
-        ORDER BY t.plan_date ASC`;
-
     try {
+        const { start, end, clients, steps, jobNumbers, statuses } = req.body;
+        
+        // Start with base parameters
+        let params = [start, end];
+        
+        // Core Logic: Plan is not null and Actual is null/empty
+        let whereClause = "WHERE t.plan_date BETWEEN ? AND ? AND (t.actual_date IS NULL OR t.actual_date = '')";
+
+        // Multi-select Filter logic with array checks to prevent SQL errors
+        if (clients && clients.length > 0) {
+            whereClause += " AND r.company_name IN (?)";
+            params.push(clients);
+        }
+        if (steps && steps.length > 0) {
+            whereClause += " AND s.step_name IN (?)";
+            params.push(steps);
+        }
+        if (jobNumbers && jobNumbers.length > 0) {
+            whereClause += " AND r.job_number IN (?)";
+            params.push(jobNumbers);
+        }
+
+        const sql = `
+            SELECT 
+                r.job_number, 
+                r.order_by, 
+                t.plan_date, 
+                u.name as doer_name, 
+                r.company_name, 
+                s.step_name, 
+                r.box_type, 
+                r.box_style, 
+                r.quantity, 
+                r.city
+            FROM fms_dibiaa_tasks t
+            JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
+            JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
+            LEFT JOIN users u ON t.employee_email = u.email 
+            ${whereClause}
+            ORDER BY t.plan_date ASC`;
+
         const [rows] = await db.query(sql, params);
         
+        // Secondary filtering for 'Pending' or 'Upcoming' status
         const filteredRows = rows.filter(row => {
             const isPast = dayjs().isAfter(dayjs(row.plan_date));
             const status = isPast ? 'Pending' : 'Upcoming';
@@ -685,7 +696,8 @@ app.post('/fms/pc-summary', async (req, res) => {
 
         res.json({ data: filteredRows, stats });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        console.error("PC Summary SQL Error:", error);
+        res.status(500).json({ error: "Internal Server Error", details: error.message });
     }
 });
 
