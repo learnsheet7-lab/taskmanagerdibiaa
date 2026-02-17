@@ -66,34 +66,46 @@ const parseToMySQLDate = (d) => {
     return dt.isValid() ? dt.format('YYYY-MM-DD') : null;
 };
 const parseDate = (d) => {
-    if (!d) return null;
-    // Parse as IST specifically
-    const dt = dayjs.tz(d.toString().trim(), ['DD/MM/YYYY HH:mm:ss', 'YYYY-MM-DD HH:mm:ss'], "Asia/Kolkata");
-    return dt.isValid() ? dt : null;
+    if (!d || d.toString().trim() === "") return null;
+    
+    const dateStr = d.toString().trim();
+    const formats = ['DD/MM/YYYY HH:mm:ss', 'YYYY-MM-DD HH:mm:ss', 'DD/MM/YYYY', 'YYYY-MM-DD'];
+    
+    // 1. First, create a basic dayjs object to check validity
+    const dt = dayjs(dateStr, formats, true);
+    
+    // 2. If valid, convert it to the Asia/Kolkata timezone
+    if (dt.isValid()) {
+        return dayjs.tz(dateStr, formats, "Asia/Kolkata");
+    }
+    
+    return null;
 };
 const addWorkdays = (startDate, days) => {
     if (!startDate) return null;
-    // Ensure we are working with an IST dayjs object
-    let d = dayjs.tz(startDate, "Asia/Kolkata");
-    if (!d.isValid()) return null;
+    
+    // Handle both dayjs objects and raw strings
+    let d = dayjs.isDayjs(startDate) ? startDate : dayjs.tz(startDate, "Asia/Kolkata");
+    
+    if (!d || !d.isValid()) return null;
 
     let added = 0;
-    while (added < days) {
+    const daysToWait = Math.floor(days); // Ensure we handle whole days
+
+    while (added < daysToWait) {
         d = d.add(1, 'day');
-        // Check if the day is NOT Sunday (0)
-        if (d.day() !== 0) {
+        if (d.day() !== 0) { // Skip Sundays
             added++;
         }
     }
     
-    // If the resulting day is a Sunday, push it to Monday but KEEP the time
+    // If result falls on Sunday, move to Monday
     if (d.day() === 0) {
         d = d.add(1, 'day');
     }
     
     return d;
 };
-
 // --- AUTH & USERS ---
 app.post('/login', async (req, res) => { try { const [r] = await db.query("SELECT * FROM users WHERE (email = ? OR mobile = ?) AND password = ?", [req.body.identifier, req.body.identifier, req.body.password]); res.json(r.length ? r[0] : { message: "User not found" }); } catch (e) { res.status(500).json(e); } });
 app.get('/users', async (req, res) => { const [r] = await db.query("SELECT * FROM users"); res.json(r); });
@@ -479,12 +491,16 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             if (N) plans[16] = dayjs(N);
 
             for (let s = 1; s <= 16; s++) { 
-                if (plans[s]) { 
-                    const sqlDate = plans[s].isValid() ? plans[s].format('YYYY-MM-DD HH:mm:ss') : null; 
-                    if(sqlDate) taskValues.push([jobId, s, sqlDate, 'Pending']); 
-                } 
-            }
+    if (plans[s]) { 
+        // IMPORTANT: Only format if the dayjs object is valid
+        const isValid = dayjs.isDayjs(plans[s]) && plans[s].isValid();
+        const sqlDate = isValid ? plans[s].format('YYYY-MM-DD HH:mm:ss') : null; 
+        
+        if (sqlDate) {
+            taskValues.push([jobId, s, sqlDate, 'Pending']); 
         }
+    } 
+}
 
         if(taskValues.length > 0) {
             const taskSql = `INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) 
