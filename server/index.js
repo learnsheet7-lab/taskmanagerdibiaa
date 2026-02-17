@@ -640,13 +640,13 @@ app.post('/fms/pc-summary', async (req, res) => {
     try {
         const { start, end, clients, steps, jobNumbers, statuses } = req.body;
         
-        // Start with base parameters
+        // 1. Initial Parameters (Start and End date)
         let params = [start, end];
         
-        // Core Logic: Plan is not null and Actual is null/empty
+        // 2. Base WHERE clause (Actual must be blank)
         let whereClause = "WHERE t.plan_date BETWEEN ? AND ? AND (t.actual_date IS NULL OR t.actual_date = '')";
 
-        // Multi-select Filter logic with array checks to prevent SQL errors
+        // 3. Robust Multi-select Check (Only add if array has items)
         if (clients && clients.length > 0) {
             whereClause += " AND r.company_name IN (?)";
             params.push(clients);
@@ -660,6 +660,7 @@ app.post('/fms/pc-summary', async (req, res) => {
             params.push(jobNumbers);
         }
 
+        // 4. SQL Query with explicit table aliasing
         const sql = `
             SELECT 
                 r.job_number, 
@@ -679,15 +680,18 @@ app.post('/fms/pc-summary', async (req, res) => {
             ${whereClause}
             ORDER BY t.plan_date ASC`;
 
+        // Using db.query (mysql2 handles the array expansion automatically)
         const [rows] = await db.query(sql, params);
         
-        // Secondary filtering for 'Pending' or 'Upcoming' status
+        // 5. Client-side Status Filtering (Pending/Upcoming)
         const filteredRows = rows.filter(row => {
             const isPast = dayjs().isAfter(dayjs(row.plan_date));
             const status = isPast ? 'Pending' : 'Upcoming';
-            return statuses && statuses.length > 0 ? statuses.includes(status) : true;
+            // Only filter by status if the user selected one
+            return (statuses && statuses.length > 0) ? statuses.includes(status) : true;
         });
 
+        // 6. Calculate Summary Stats
         const stats = {
             totalQty: filteredRows.reduce((acc, curr) => acc + (Number(curr.quantity) || 0), 0),
             totalJobs: filteredRows.length,
@@ -695,9 +699,11 @@ app.post('/fms/pc-summary', async (req, res) => {
         };
 
         res.json({ data: filteredRows, stats });
+
     } catch (error) {
-        console.error("PC Summary SQL Error:", error);
-        res.status(500).json({ error: "Internal Server Error", details: error.message });
+        // Detailed logging to help you see the exact SQL error in Vercel/Terminal
+        console.error("PC SUMMARY ERROR:", error.message);
+        res.status(500).json({ error: error.message });
     }
 });
 
