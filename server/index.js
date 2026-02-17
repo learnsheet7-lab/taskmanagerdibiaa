@@ -636,6 +636,50 @@ app.get('/fms/rolling-report', async (req, res) => {
     }
 });
 
+app.post('/fms/pc-summary', async (req, res) => {
+    const { start, end, clients, steps, jobNumbers, statuses } = req.body;
+    let params = [start, end];
+    
+    let whereClause = "WHERE t.plan_date BETWEEN ? AND ? ";
+
+    // Multi-select Filter Logic
+    if (clients && clients.length > 0) { whereClause += " AND r.company_name IN (?)"; params.push(clients); }
+    if (steps && steps.length > 0) { whereClause += " AND s.step_name IN (?)"; params.push(steps); }
+    if (jobNumbers && jobNumbers.length > 0) { whereClause += " AND r.job_number IN (?)"; params.push(jobNumbers); }
+
+    const sql = `
+        SELECT 
+            r.job_number, r.order_by, t.plan_date, t.custom_field_1 as doer_name,
+            r.company_name, s.step_name, r.box_type, r.box_style, r.quantity, r.city
+        FROM fms_dibiaa_tasks t
+        JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
+        JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
+        ${whereClause}
+        ORDER BY t.plan_date ASC`;
+
+    try {
+        const [rows] = await db.query(sql, params);
+        
+        // Final Status filtering (since Pending/Upcoming is calculated via time)
+        const filteredRows = rows.filter(row => {
+            const isPast = dayjs().isAfter(dayjs(row.plan_date));
+            const status = isPast ? 'Pending' : 'Upcoming';
+            return statuses && statuses.length > 0 ? statuses.includes(status) : true;
+        });
+
+        // Calculate Stats
+        const stats = {
+            totalQty: filteredRows.reduce((acc, curr) => acc + (Number(curr.quantity) || 0), 0),
+            totalJobs: filteredRows.length,
+            uniqueClients: new Set(filteredRows.map(r => r.company_name)).size
+        };
+
+        res.json({ data: filteredRows, stats });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.get('/mis/checklist-report', async (req, res) => {
     const { start, end } = req.query;
     const today = dayjs().format('YYYY-MM-DD');
