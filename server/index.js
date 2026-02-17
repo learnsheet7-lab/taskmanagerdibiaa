@@ -640,13 +640,10 @@ app.post('/fms/pc-summary', async (req, res) => {
     try {
         const { start, end, clients, steps, jobNumbers, statuses } = req.body;
         
-        // 1. Initial Parameters (Start and End date)
         let params = [start, end];
-        
-        // 2. Base WHERE clause (Actual must be blank)
         let whereClause = "WHERE t.plan_date BETWEEN ? AND ? AND (t.actual_date IS NULL OR t.actual_date = '')";
 
-        // 3. Robust Multi-select Check (Only add if array has items)
+        // Multi-select Filter logic
         if (clients && clients.length > 0) {
             whereClause += " AND r.company_name IN (?)";
             params.push(clients);
@@ -660,13 +657,12 @@ app.post('/fms/pc-summary', async (req, res) => {
             params.push(jobNumbers);
         }
 
-        // 4. SQL Query with explicit table aliasing
         const sql = `
             SELECT 
                 r.job_number, 
                 r.order_by, 
                 t.plan_date, 
-                u.name as doer_name, 
+                t.employee_email, -- Used for the Pie Chart instead of Name
                 r.company_name, 
                 s.step_name, 
                 r.box_type, 
@@ -676,22 +672,17 @@ app.post('/fms/pc-summary', async (req, res) => {
             FROM fms_dibiaa_tasks t
             JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
             JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
-            LEFT JOIN users u ON t.employee_email = u.email 
             ${whereClause}
             ORDER BY t.plan_date ASC`;
 
-        // Using db.query (mysql2 handles the array expansion automatically)
         const [rows] = await db.query(sql, params);
         
-        // 5. Client-side Status Filtering (Pending/Upcoming)
         const filteredRows = rows.filter(row => {
             const isPast = dayjs().isAfter(dayjs(row.plan_date));
             const status = isPast ? 'Pending' : 'Upcoming';
-            // Only filter by status if the user selected one
             return (statuses && statuses.length > 0) ? statuses.includes(status) : true;
         });
 
-        // 6. Calculate Summary Stats
         const stats = {
             totalQty: filteredRows.reduce((acc, curr) => acc + (Number(curr.quantity) || 0), 0),
             totalJobs: filteredRows.length,
@@ -699,10 +690,8 @@ app.post('/fms/pc-summary', async (req, res) => {
         };
 
         res.json({ data: filteredRows, stats });
-
     } catch (error) {
-        // Detailed logging to help you see the exact SQL error in Vercel/Terminal
-        console.error("PC SUMMARY ERROR:", error.message);
+        console.error("PC Summary Error:", error.message);
         res.status(500).json({ error: error.message });
     }
 });
