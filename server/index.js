@@ -560,7 +560,19 @@ app.post('/fms/dibiaa-complete', async (req, res) => {
 app.get('/fms/rolling-report', async (req, res) => {
     const { start, end, client, city, step } = req.query;
     let params = [start, end];
-    let whereClause = "WHERE t.plan_date BETWEEN ? AND ? AND t.status = 'Pending'";
+    
+    // Logic: Join with Step 13 to check the QC + Packing Plan status
+    let whereClause = `
+        WHERE t.plan_date BETWEEN ? AND ? 
+        AND t.status = 'Pending'
+        AND EXISTS (
+            SELECT 1 FROM fms_dibiaa_tasks 
+            WHERE job_id = t.job_id 
+            AND step_id = 13 
+            AND plan_date IS NOT NULL 
+            AND (actual_date IS NULL OR actual_date = '')
+        )
+    `;
 
     if (client) { whereClause += " AND r.company_name = ?"; params.push(client); }
     if (city) { whereClause += " AND r.city = ?"; params.push(city); }
@@ -570,7 +582,7 @@ app.get('/fms/rolling-report', async (req, res) => {
         SELECT 
             r.job_number, r.order_by, s.step_name, t.plan_date, 
             r.company_name, r.box_type, r.quantity, r.city,
-            DATEDIFF(NOW(), t.plan_date) as delay_days
+            DATEDIFF(NOW(), t.plan_date) as delay_val
         FROM fms_dibiaa_tasks t
         JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
         JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
@@ -580,7 +592,6 @@ app.get('/fms/rolling-report', async (req, res) => {
     try {
         const [rows] = await db.query(sql, params);
         
-        // Calculate Stats
         const stats = {
             uniqueClients: new Set(rows.map(r => r.company_name)).size,
             totalJobs: rows.length,
