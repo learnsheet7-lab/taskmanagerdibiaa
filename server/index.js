@@ -640,9 +640,13 @@ app.post('/fms/pc-summary', async (req, res) => {
     const { start, end, clients, steps, jobNumbers, statuses } = req.body;
     let params = [start, end];
     
-    let whereClause = "WHERE t.plan_date BETWEEN ? AND ? ";
+    // Core Logic: Plan is NOT NULL and Actual is NULL/Empty
+    let whereClause = `
+        WHERE t.plan_date BETWEEN ? AND ? 
+        AND (t.actual_date IS NULL OR t.actual_date = '')
+    `;
 
-    // Multi-select Filter Logic
+    // Multi-select Filters
     if (clients && clients.length > 0) { whereClause += " AND r.company_name IN (?)"; params.push(clients); }
     if (steps && steps.length > 0) { whereClause += " AND s.step_name IN (?)"; params.push(steps); }
     if (jobNumbers && jobNumbers.length > 0) { whereClause += " AND r.job_number IN (?)"; params.push(jobNumbers); }
@@ -660,14 +664,13 @@ app.post('/fms/pc-summary', async (req, res) => {
     try {
         const [rows] = await db.query(sql, params);
         
-        // Final Status filtering (since Pending/Upcoming is calculated via time)
+        // Secondary Status Filtering (Pending vs Upcoming)
         const filteredRows = rows.filter(row => {
             const isPast = dayjs().isAfter(dayjs(row.plan_date));
             const status = isPast ? 'Pending' : 'Upcoming';
             return statuses && statuses.length > 0 ? statuses.includes(status) : true;
         });
 
-        // Calculate Stats
         const stats = {
             totalQty: filteredRows.reduce((acc, curr) => acc + (Number(curr.quantity) || 0), 0),
             totalJobs: filteredRows.length,
