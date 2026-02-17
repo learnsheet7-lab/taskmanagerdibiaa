@@ -641,9 +641,11 @@ app.post('/fms/pc-summary', async (req, res) => {
         const { start, end, clients, steps, jobNumbers, statuses } = req.body;
         
         let params = [start, end];
+        
+        // Base WHERE clause: Plan is set, Actual is blank
         let whereClause = "WHERE t.plan_date BETWEEN ? AND ? AND (t.actual_date IS NULL OR t.actual_date = '')";
 
-        // Multi-select Filter logic
+        // Multi-select Filters (Only add if they contain data)
         if (clients && clients.length > 0) {
             whereClause += " AND r.company_name IN (?)";
             params.push(clients);
@@ -662,7 +664,6 @@ app.post('/fms/pc-summary', async (req, res) => {
                 r.job_number, 
                 r.order_by, 
                 t.plan_date, 
-                t.employee_email, -- Used for the Pie Chart instead of Name
                 r.company_name, 
                 s.step_name, 
                 r.box_type, 
@@ -677,6 +678,7 @@ app.post('/fms/pc-summary', async (req, res) => {
 
         const [rows] = await db.query(sql, params);
         
+        // Filter by Pending/Upcoming Status in JavaScript
         const filteredRows = rows.filter(row => {
             const isPast = dayjs().isAfter(dayjs(row.plan_date));
             const status = isPast ? 'Pending' : 'Upcoming';
@@ -690,8 +692,9 @@ app.post('/fms/pc-summary', async (req, res) => {
         };
 
         res.json({ data: filteredRows, stats });
+
     } catch (error) {
-        console.error("PC Summary Error:", error.message);
+        console.error("SQL Error:", error.message);
         res.status(500).json({ error: error.message });
     }
 });
