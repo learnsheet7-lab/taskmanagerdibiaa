@@ -388,7 +388,6 @@ app.get('/mis/report', async (req, res) => {
     res.json(rows); 
 });
 
-// ================= DIBIAA FMS ENGINE =================
 app.post('/fms/sync-dibiaa', async (req, res) => {
     try {
         const SHEET_ID = '1C3qHR_jbjHgOQCM7MwRB4AZXtuY2W9jLpqIAEbYFWkQ';
@@ -408,6 +407,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
                 rowIndex, parseToMySQLDateTime(r[0]), r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], parseToMySQLDate(r[13]), r[14]
             ]);
         }
+
         if(rawValues.length > 0) {
             const rawSql = `INSERT INTO fms_dibiaa_raw (sheet_row_index, timestamp, otd_type, job_number, order_by, company_name, box_type, box_style, box_color, printing_type, printing_color, specification, city, quantity, lead_time, repeat_new) 
                             VALUES ? 
@@ -420,17 +420,23 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
         }
 
         const [jobs] = await db.query("SELECT job_id, sheet_row_index FROM fms_dibiaa_raw");
-        const jobMap = {}; jobs.forEach(j => jobMap[j.sheet_row_index] = j.job_id);
+        const jobMap = {}; 
+        jobs.forEach(j => jobMap[j.sheet_row_index] = j.job_id);
+        
         const [allTasks] = await db.query("SELECT job_id, step_id, actual_date FROM fms_dibiaa_tasks");
-        const taskMap = {}; allTasks.forEach(t => taskMap[`${t.job_id}_${t.step_id}`] = t.actual_date ? dayjs(t.actual_date) : null);
+        const taskMap = {}; 
+        allTasks.forEach(t => taskMap[`${t.job_id}_${t.step_id}`] = t.actual_date ? dayjs.tz(t.actual_date, "Asia/Kolkata") : null);
 
         const taskValues = [];
         for (let i = 0; i < rows.length; i++) {
-            const r = rows[i]; const rowIndex = 2 + i; const jobId = jobMap[rowIndex];
+            const r = rows[i]; 
+            const rowIndex = 2 + i; 
+            const jobId = jobMap[rowIndex];
             if(!jobId) continue;
             
             const getAct = (s) => taskMap[`${jobId}_${s}`];
             const A = parseDate(r[0]); const B = r[1]; const F = r[5]; const G = r[6]; const I = r[8]; const K = r[10]; const N = parseDate(r[13]);
+            
             const hasInner = (K || '').toLowerCase().includes('inner'); 
             const isOffsetFoil = (I === 'Offset Print' || I === 'Foil Print' || I === 'No'); 
             const isScreenPrint = (I === 'Screen print');
@@ -439,33 +445,35 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             if (I !== 'No' && A) plans[4] = addWorkdays(A, 3);
             const step4Act = getAct(4);
             if ((B==='OTD' || B==='Jewellery (OTD)')) { if (step4Act) plans[1] = addWorkdays(step4Act, 6); }
+            
             const step1Act = getAct(1); 
             if ((B === 'OTD' || B === 'Jewellery (OTD)') && step1Act) { plans[2] = addWorkdays(step1Act, 1); } 
             else if (I === 'No' && A ) { plans[2] = addWorkdays(A, 1); } 
             else if (step4Act) { plans[2] = addWorkdays(step4Act, 1); }
+            
             if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1); 
             if (!(F==='Paper Bag' || (F||'').endsWith('Tray'))) { if (getAct(2)) plans[5] = addWorkdays(getAct(2), 3); }
             if (I === 'Foil Print' && getAct(3)) plans[6] = addWorkdays(getAct(3), 3);
             if (I !== 'Foil Print' && getAct(3)) plans[7] = addWorkdays(getAct(3), 3); else if (getAct(6)) plans[7] = addWorkdays(getAct(6), 3);
-            if (getAct(7)) plans[8] = addWorkdays(getAct(7), 1); //full kitting step
+            if (getAct(7)) plans[8] = addWorkdays(getAct(7), 1); 
+
             if (getAct(8)) { 
-            const condition = (G==='Magnetic' || (G||'').startsWith('Sliding Handle') && I === 'Screen print') || (G==='Magnetic' && isOffsetFoil && hasInner) || (G==='Magnetic' && hasInner && I === 'Screen print'); 
-            if(condition && getAct(8)) plans[9] = addWorkdays(getAct(8), 1); } //partial making ok
-            const isTopBottom = G==='Top-Bottom'; 
-            const isSlidingBox = G==='Sliding Box'; 
-            const isMagnetic = G==='Magnetic'; 
-            const isSlidingHandle = G==='Sliding Handle Box'; 
-            const isPaperBag = F==='Paper Bag'; 
+                const condition = (G==='Magnetic' || (G||'').startsWith('Sliding Handle') && I === 'Screen print') || (G==='Magnetic' && isOffsetFoil && hasInner) || (G==='Magnetic' && hasInner && I === 'Screen print'); 
+                if(condition) plans[9] = addWorkdays(getAct(8), 1); 
+            } 
+
+            const isTopBottom = G==='Top-Bottom'; const isSlidingBox = G==='Sliding Box'; const isMagnetic = G==='Magnetic'; 
+            const isSlidingHandle = G==='Sliding Handle Box'; const isPaperBag = F==='Paper Bag'; 
+            
             let targetDate10 = null; 
-            if (isPaperBag && isScreenPrint) targetDate10 = getAct(12);//ok
-             else if (isPaperBag && isOffsetFoil) targetDate10 = getAct(8); //ok
-             else if (isMagnetic && hasInner) targetDate10 = getAct(11); //ok
-             else if ((isMagnetic || isSlidingHandle) && isOffsetFoil) targetDate10 = getAct(8);  //ok
-             
-             else if ((isMagnetic || isSlidingHandle) && isScreenPrint) targetDate10 = getAct(12);  //ok
-             else if (isTopBottom && hasInner) targetDate10 = getAct(11);  //ok
-             else if (isTopBottom || isSlidingBox) targetDate10 = getAct(8);  //ok
-             if (targetDate10) plans[10] = addWorkdays(targetDate10, 2);
+            if (isPaperBag && isScreenPrint) targetDate10 = getAct(12);
+            else if (isPaperBag && isOffsetFoil) targetDate10 = getAct(8);
+            else if (isMagnetic && hasInner) targetDate10 = getAct(11);
+            else if ((isMagnetic || isSlidingHandle) && isOffsetFoil) targetDate10 = getAct(8);
+            else if ((isMagnetic || isSlidingHandle) && isScreenPrint) targetDate10 = getAct(12);
+            else if (isTopBottom && hasInner) targetDate10 = getAct(11);
+            else if (isTopBottom || isSlidingBox) targetDate10 = getAct(8);
+            if (targetDate10) plans[10] = addWorkdays(targetDate10, 2);
 
             const base11 = getAct(10) || getAct(9) || getAct(8); 
             if (base11 && hasInner) plans[11] = addWorkdays(base11, 1);
@@ -477,30 +485,24 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             else if ((isTopBottom && hasInner) && I === 'Screen print') targetDate12 = getAct(10);
             else if ((isTopBottom || isSlidingBox) && I === 'Screen print') targetDate12 = getAct(10);
             if (targetDate12) plans[12] = addWorkdays(targetDate12, 1);
-            // if (I === 'Screen print' && getAct(8)) plans[12] = addWorkdays(getAct(8), 1);
 
             const isboxtypecon = (F === 'Foam' || F === 'Cards' || F === 'Hooks');
-
             const base13 = getAct(12) || getAct(11) || getAct(10); 
             if(isboxtypecon) plans[13] = addWorkdays(getAct(8),1);
             else if (base13) plans[13] = addWorkdays(base13, 1);
 
-
             if (getAct(13)) plans[14] = addWorkdays(getAct(13), 1); 
             if (getAct(14)) plans[15] = addWorkdays(getAct(14), 1); 
-            if (N) plans[16] = dayjs(N);
+            if (N) plans[16] = N;
 
             for (let s = 1; s <= 16; s++) { 
-    if (plans[s]) { 
-        // IMPORTANT: Only format if the dayjs object is valid
-        const isValid = dayjs.isDayjs(plans[s]) && plans[s].isValid();
-        const sqlDate = isValid ? plans[s].format('YYYY-MM-DD HH:mm:ss') : null; 
-        
-        if (sqlDate) {
-            taskValues.push([jobId, s, sqlDate, 'Pending']); 
-        }
-    } 
-}
+                if (plans[s]) { 
+                    const isValid = dayjs.isDayjs(plans[s]) && plans[s].isValid();
+                    const sqlDate = isValid ? plans[s].format('YYYY-MM-DD HH:mm:ss') : null; 
+                    if(sqlDate) taskValues.push([jobId, s, sqlDate, 'Pending']); 
+                } 
+            }
+        } // End of rows loop
 
         if(taskValues.length > 0) {
             const taskSql = `INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) 
@@ -510,7 +512,10 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             await db.query(taskSql, [taskValues]);
         }
         res.json({message: `Sync Complete. Processed ${rows.length} rows.`});
-    } catch(e) { console.error("Sync Error:", e); res.status(500).json({error: e.message}); }
+    } catch(e) { 
+        console.error("Sync Error:", e); 
+        res.status(500).json({error: e.message}); 
+    }
 });
 
 app.get('/fms/dibiaa-tasks', async (req, res) => { 
