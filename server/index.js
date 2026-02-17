@@ -593,15 +593,21 @@ app.get('/fms/rolling-report', async (req, res) => {
     const { start, end, client, city, step } = req.query;
     let params = [start, end];
     
-    // Logic: Join with Step 13 to check the QC + Packing Plan status
+    // Condition 1: Step 16 (Dispatch) has a plan date.
+    // Condition 2: Step 13 (QC + Packing) Actual Date is still NULL or empty.
     let whereClause = `
         WHERE t.plan_date BETWEEN ? AND ? 
         AND t.status = 'Pending'
         AND EXISTS (
             SELECT 1 FROM fms_dibiaa_tasks 
             WHERE job_id = t.job_id 
+            AND step_id = 16 
+            AND plan_date IS NOT NULL
+        )
+        AND EXISTS (
+            SELECT 1 FROM fms_dibiaa_tasks 
+            WHERE job_id = t.job_id 
             AND step_id = 13 
-            AND plan_date IS NOT NULL 
             AND (actual_date IS NULL OR actual_date = '')
         )
     `;
@@ -632,6 +638,7 @@ app.get('/fms/rolling-report', async (req, res) => {
 
         res.json({ data: rows, stats });
     } catch (error) {
+        console.error("Rolling Report Error:", error.message);
         res.status(500).json({ error: error.message });
     }
 });
