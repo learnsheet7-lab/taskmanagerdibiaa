@@ -640,31 +640,37 @@ app.post('/fms/pc-summary', async (req, res) => {
     const { start, end, clients, steps, jobNumbers, statuses } = req.body;
     let params = [start, end];
     
-    // Core Logic: Plan is NOT NULL and Actual is NULL/Empty
     let whereClause = `
         WHERE t.plan_date BETWEEN ? AND ? 
         AND (t.actual_date IS NULL OR t.actual_date = '')
     `;
 
-    // Multi-select Filters
     if (clients && clients.length > 0) { whereClause += " AND r.company_name IN (?)"; params.push(clients); }
     if (steps && steps.length > 0) { whereClause += " AND s.step_name IN (?)"; params.push(steps); }
     if (jobNumbers && jobNumbers.length > 0) { whereClause += " AND r.job_number IN (?)"; params.push(jobNumbers); }
 
     const sql = `
         SELECT 
-            r.job_number, r.order_by, t.plan_date, t.custom_field_1 as doer_name,
-            r.company_name, s.step_name, r.box_type, r.box_style, r.quantity, r.city
+            r.job_number, 
+            r.order_by, 
+            t.plan_date, 
+            u.name as doer_name, -- Fetching actual name from users table
+            r.company_name, 
+            s.step_name, 
+            r.box_type, 
+            r.box_style, 
+            r.quantity, 
+            r.city
         FROM fms_dibiaa_tasks t
         JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
         JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
+        LEFT JOIN users u ON t.employee_email = u.email -- Joining to get the Doer Name
         ${whereClause}
         ORDER BY t.plan_date ASC`;
 
     try {
         const [rows] = await db.query(sql, params);
         
-        // Secondary Status Filtering (Pending vs Upcoming)
         const filteredRows = rows.filter(row => {
             const isPast = dayjs().isAfter(dayjs(row.plan_date));
             const status = isPast ? 'Pending' : 'Upcoming';
