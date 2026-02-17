@@ -557,6 +557,42 @@ app.post('/fms/dibiaa-complete', async (req, res) => {
     }
 });
 
+app.get('/fms/rolling-report', async (req, res) => {
+    const { start, end, client, city, step } = req.query;
+    let params = [start, end];
+    let whereClause = "WHERE t.plan_date BETWEEN ? AND ? AND t.status = 'Pending'";
+
+    if (client) { whereClause += " AND r.company_name = ?"; params.push(client); }
+    if (city) { whereClause += " AND r.city = ?"; params.push(city); }
+    if (step) { whereClause += " AND s.step_name = ?"; params.push(step); }
+
+    const sql = `
+        SELECT 
+            r.job_number, r.order_by, s.step_name, t.plan_date, 
+            r.company_name, r.box_type, r.quantity, r.city,
+            DATEDIFF(NOW(), t.plan_date) as delay_days
+        FROM fms_dibiaa_tasks t
+        JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
+        JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
+        ${whereClause}
+        ORDER BY t.plan_date ASC`;
+
+    try {
+        const [rows] = await db.query(sql, params);
+        
+        // Calculate Stats
+        const stats = {
+            uniqueClients: new Set(rows.map(r => r.company_name)).size,
+            totalJobs: rows.length,
+            totalQty: rows.reduce((acc, curr) => acc + (Number(curr.quantity) || 0), 0)
+        };
+
+        res.json({ data: rows, stats });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.get('/mis/checklist-report', async (req, res) => {
     const { start, end } = req.query;
     const today = dayjs().format('YYYY-MM-DD');
