@@ -714,8 +714,8 @@ app.get('/mis/checklist-report', async (req, res) => {
 
     const sql = `
         SELECT 
-            employee_name, 
-            employee_email,
+            MAX(TRIM(employee_name)) as employee_name, -- Takes the longest/most recent name
+            LOWER(TRIM(employee_email)) as employee_email,
             COUNT(id) as total_task,
             SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) as total_pending,
             SUM(CASE WHEN status = 'Completed' THEN 1 ELSE 0 END) as total_completed,
@@ -725,7 +725,7 @@ app.get('/mis/checklist-report', async (req, res) => {
             END) as total_delayed
         FROM checklist_tasks
         WHERE target_date BETWEEN ? AND ?
-        GROUP BY employee_email, employee_name
+        GROUP BY LOWER(TRIM(employee_email)) -- Strictly unique grouping
         HAVING total_task > 0`;
 
     try {
