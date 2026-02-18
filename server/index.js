@@ -647,14 +647,15 @@ app.get('/fms/rolling-report', async (req, res) => {
 
 app.post('/fms/pc-summary', async (req, res) => {
     try {
-        const { start, end, clients, steps, jobNumbers, statuses } = req.body;
+        const { clients, steps, jobNumbers, statuses } = req.body;
         
-        let params = [start, end];
+        // 1. New params array (No dates needed now)
+        let params = [];
         
-        // Base WHERE clause: Plan is set, Actual is blank
-        let whereClause = "WHERE t.plan_date BETWEEN ? AND ? AND (t.actual_date IS NULL OR t.actual_date = '')";
+        // 2. Base WHERE clause: Shows everything where plan exists but actual is blank
+        let whereClause = "WHERE t.plan_date IS NOT NULL AND (t.actual_date IS NULL OR t.actual_date = '')";
 
-        // Multi-select Filters (Only add if they contain data)
+        // 3. Multi-select Filter logic
         if (clients && clients.length > 0) {
             whereClause += " AND r.company_name IN (?)";
             params.push(clients);
@@ -670,15 +671,9 @@ app.post('/fms/pc-summary', async (req, res) => {
 
         const sql = `
             SELECT 
-                r.job_number, 
-                r.order_by, 
-                t.plan_date, 
-                r.company_name, 
-                s.step_name, 
-                r.box_type, 
-                r.box_style, 
-                r.quantity, 
-                r.city
+                r.job_number, r.order_by, t.plan_date, 
+                r.company_name, s.step_name, r.box_type, 
+                r.box_style, r.quantity, r.city
             FROM fms_dibiaa_tasks t
             JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
             JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
@@ -687,7 +682,7 @@ app.post('/fms/pc-summary', async (req, res) => {
 
         const [rows] = await db.query(sql, params);
         
-        // Filter by Pending/Upcoming Status in JavaScript
+        // 4. Status Filtering
         const filteredRows = rows.filter(row => {
             const isPast = dayjs().isAfter(dayjs(row.plan_date));
             const status = isPast ? 'Pending' : 'Upcoming';
@@ -703,7 +698,6 @@ app.post('/fms/pc-summary', async (req, res) => {
         res.json({ data: filteredRows, stats });
 
     } catch (error) {
-        console.error("SQL Error:", error.message);
         res.status(500).json({ error: error.message });
     }
 });
