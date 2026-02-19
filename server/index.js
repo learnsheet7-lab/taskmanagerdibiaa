@@ -399,15 +399,47 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
         const rows = response.data.values;
         if(!rows || rows.length === 0) return res.json({message: "No data found"});
 
+        // --- 1. DETECT CHANGES IN CORE COLUMNS ---
+        // Fetch existing raw data to compare against incoming Sheet data
+        const [existingRaw] = await db.query("SELECT job_id, job_number, otd_type, box_type, box_style, printing_type, specification FROM fms_dibiaa_raw");
+        const rawMapByNumber = {};
+        existingRaw.forEach(r => rawMapByNumber[r.job_number] = r);
+
+        const jobsToReset = [];
         const rawValues = [];
+
         for(let i=0; i<rows.length; i++) {
             const r = rows[i];
             const rowIndex = 2 + i;
+            const jobNo = r[2];
+            const current = rawMapByNumber[jobNo];
+
+            // If job exists, check if any core columns changed
+            if (current) {
+                const hasChanged = 
+                    current.otd_type !== r[1] || 
+                    current.box_type !== r[5] || 
+                    current.box_style !== r[6] || 
+                    current.printing_type !== r[8] || 
+                    current.specification !== r[10];
+
+                if (hasChanged) {
+                    jobsToReset.push(current.job_id);
+                }
+            }
+
             rawValues.push([
-                rowIndex, parseToMySQLDateTime(r[0]), r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], parseToMySQLDate(r[13]), r[14]
+                rowIndex, parseToMySQLDateTime(r[0]), r[1], jobNo, r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], parseToMySQLDate(r[13]), r[14]
             ]);
         }
 
+        // --- 2. DELETE OLD TASKS FOR CHANGED JOBS ---
+        if (jobsToReset.length > 0) {
+            // This clears the slate so the loop below can regenerate fresh tasks
+            await db.query("DELETE FROM fms_dibiaa_tasks WHERE job_id IN (?)", [jobsToReset]);
+        }
+
+        // --- 3. UPDATE RAW DATA ---
         if(rawValues.length > 0) {
             const rawSql = `INSERT INTO fms_dibiaa_raw (sheet_row_index, timestamp, otd_type, job_number, order_by, company_name, box_type, box_style, box_color, printing_type, printing_color, specification, city, quantity, lead_time, repeat_new) 
                             VALUES ? 
@@ -419,6 +451,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             await db.query(rawSql, [rawValues]);
         }
 
+        // Refresh job map after raw insert to get new job_ids if any
         const [jobs] = await db.query("SELECT job_id, sheet_row_index FROM fms_dibiaa_raw");
         const jobMap = {}; 
         jobs.forEach(j => jobMap[j.sheet_row_index] = j.job_id);
@@ -427,6 +460,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
         const taskMap = {}; 
         allTasks.forEach(t => taskMap[`${t.job_id}_${t.step_id}`] = t.actual_date ? dayjs.tz(t.actual_date, "Asia/Kolkata") : null);
 
+        // --- 4. TASK GENERATION LOOP ---
         const taskValues = [];
         for (let i = 0; i < rows.length; i++) {
             const r = rows[i]; 
@@ -434,6 +468,10 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             const jobId = jobMap[rowIndex];
             if(!jobId) continue;
             
+            // BLANK FIELD CHECK: Skip task generation if core data is missing
+            const isAnyBlank = !r[1] || !r[5] || !r[6] || !r[8] || !r[10];
+            if (isAnyBlank) continue;
+
             const getAct = (s) => taskMap[`${jobId}_${s}`];
             const A = parseDate(r[0]); const B = r[1]; const F = r[5]; const G = r[6]; const I = r[8]; const K = r[10]; const N = parseDate(r[13]);
             
@@ -502,8 +540,9 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
                     if(sqlDate) taskValues.push([jobId, s, sqlDate, 'Pending']); 
                 } 
             }
-        } // End of rows loop
+        }
 
+        // --- 5. BULK UPSERT ---
         if(taskValues.length > 0) {
             const taskSql = `INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) 
                             VALUES ? 
@@ -511,7 +550,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
                             plan_date = IF(status = 'Completed', plan_date, VALUES(plan_date))`;
             await db.query(taskSql, [taskValues]);
         }
-        res.json({message: `Sync Complete. Processed ${rows.length} rows.`});
+        res.json({message: `Sync Complete. Processed ${rows.length} rows. Reset ${jobsToReset.length} modified jobs.`});
     } catch(e) { 
         console.error("Sync Error:", e); 
         res.status(500).json({error: e.message}); 
