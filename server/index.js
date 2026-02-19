@@ -769,6 +769,56 @@ app.get('/mis/checklist-report', async (req, res) => {
     }
 });
 
+// 1. Fetch All Logs for Admin
+app.get('/fms/logs', async (req, res) => {
+    try {
+        const sql = `
+            SELECT t.id, r.job_number, s.step_name, t.plan_date, t.actual_date, t.step_id
+            FROM fms_dibiaa_tasks t
+            JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
+            JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
+            ORDER BY r.job_number DESC, t.step_id ASC`;
+        const [rows] = await db.query(sql);
+        res.json(rows);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 2. Update Actual Date Manually
+app.put('/fms/update-actual', async (req, res) => {
+    const { id, actual_date } = req.body;
+    try {
+        await db.query("UPDATE fms_dibiaa_tasks SET actual_date = ?, status = ? WHERE id = ?", 
+            [actual_date || null, actual_date ? 'Completed' : 'Pending', id]);
+        res.json({ message: "Updated Successfully" });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 3. Reset Job Logic
+app.post('/fms/reset-job', async (req, res) => {
+    const { job_number, reset_to_step_id } = req.body;
+    try {
+        const [job] = await db.query("SELECT job_id FROM fms_dibiaa_raw WHERE job_number = ?", [job_number]);
+        if (job.length === 0) return res.status(404).json({ message: "Job Not Found" });
+        const jobId = job[0].job_id;
+
+        // Reset Logic: Delete tasks between (Selected Step + 1) and Step 15
+        // We keep Step 16 (Dispatch) and anything before the reset step
+        await db.query(`
+            DELETE FROM fms_dibiaa_tasks 
+            WHERE job_id = ? 
+            AND step_id > ? 
+            AND step_id <= 15`, [jobId, reset_to_step_id]);
+
+        // Mark the 'Reset To' step as Pending (remove its actual date)
+        await db.query(`
+            UPDATE fms_dibiaa_tasks 
+            SET actual_date = NULL, status = 'Pending' 
+            WHERE job_id = ? AND step_id = ?`, [jobId, reset_to_step_id]);
+
+        res.json({ message: "Job Reset Successfully" });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Endpoint for Checklist Detail Popup
 app.get('/mis/checklist-tasks', async (req, res) => {
     const { email, start, end } = req.query;
