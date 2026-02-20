@@ -392,123 +392,104 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
     try {
         const SHEET_ID = '1C3qHR_jbjHgOQCM7MwRB4AZXtuY2W9jLpqIAEbYFWkQ';
         const auth = getAuth();
-        if(!auth) return res.status(500).json({error: "Google Auth Failed"});
+        if (!auth) return res.status(500).json({ error: "Google Auth Failed" });
 
         const sheets = google.sheets({ version: 'v4', auth });
         const response = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `fmstask!A2:O` });
         const rows = response.data.values;
-        if(!rows || rows.length === 0) return res.json({message: "No data found"});
+        if (!rows || rows.length === 0) return res.json({ message: "No data found" });
 
-        // --- 1. DETECT CHANGES IN CORE COLUMNS ---
-        // Fetch existing raw data to compare against incoming Sheet data
-        const [existingRaw] = await db.query("SELECT job_id, job_number, otd_type, box_type, box_style, printing_type, specification FROM fms_dibiaa_raw");
-        const rawMapByNumber = {};
-        existingRaw.forEach(r => rawMapByNumber[r.job_number] = r);
+        // 1. UPDATE RAW DATA (Always update raw details first)
+        const rawValues = rows.map((r, i) => [
+            2 + i, parseToMySQLDateTime(r[0]), r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], parseToMySQLDate(r[13]), r[14]
+        ]);
 
-        const jobsToReset = [];
-        const rawValues = [];
+        const rawSql = `INSERT INTO fms_dibiaa_raw (sheet_row_index, timestamp, otd_type, job_number, order_by, company_name, box_type, box_style, box_color, printing_type, printing_color, specification, city, quantity, lead_time, repeat_new) 
+                        VALUES ? 
+                        ON DUPLICATE KEY UPDATE 
+                        otd_type=VALUES(otd_type), box_type=VALUES(box_type), printing_type=VALUES(printing_type), 
+                        quantity=VALUES(quantity), company_name=VALUES(company_name), box_style=VALUES(box_style),
+                        box_color=VALUES(box_color), printing_color=VALUES(printing_color), specification=VALUES(specification),
+                        city=VALUES(city), lead_time=VALUES(lead_time), repeat_new=VALUES(repeat_new)`;
+        await db.query(rawSql, [rawValues]);
 
-        for(let i=0; i<rows.length; i++) {
+        // 2. PREPARE MAPS FOR CALCULATION
+        const [jobs] = await db.query("SELECT job_id, sheet_row_index FROM fms_dibiaa_raw");
+        const jobMap = {};
+        jobs.forEach(j => jobMap[j.sheet_row_index] = j.job_id);
+
+        const [allTasks] = await db.query("SELECT id, job_id, step_id, actual_date FROM fms_dibiaa_tasks");
+        const taskMap = {}; // Maps 'jobId_stepId' to the full task object
+        allTasks.forEach(t => {
+            taskMap[`${t.job_id}_${t.step_id}`] = {
+                id: t.id,
+                actual: t.actual_date ? dayjs.tz(t.actual_date, "Asia/Kolkata") : null
+            };
+        });
+
+        const taskUpdates = [];
+        const tasksToDelete = [];
+
+        // 3. RE-EVALUATE EVERY ROW LOGICALLY
+        for (let i = 0; i < rows.length; i++) {
             const r = rows[i];
             const rowIndex = 2 + i;
-            const jobNo = r[2];
-            const current = rawMapByNumber[jobNo];
+            const jobId = jobMap[rowIndex];
+            if (!jobId) continue;
 
-            // If job exists, check if any core columns changed
-            if (current) {
-                const hasChanged = 
-                    current.otd_type !== r[1] || 
-                    current.box_type !== r[5] || 
-                    current.box_style !== r[6] || 
-                    current.printing_type !== r[8] || 
-                    current.specification !== r[10];
+            const getAct = (s) => taskMap[`${jobId}_${s}`]?.actual || null;
 
-                if (hasChanged) {
-                    jobsToReset.push(current.job_id);
-                }
+            // Variables from Sheet
+            const A = parseDate(r[0]); // Timestamp
+            const B = r[1];           // OTD Type
+            const F = r[5];           // Box Type
+            const G = r[6];           // Box Style
+            const I = r[8];           // Printing Type
+            const K = r[10];          // Specification
+            const N = parseDate(r[13]); // Lead Time
+
+            const hasInner = (K || '').toLowerCase().includes('inner');
+            const isOffsetFoil = (I === 'Offset Print' || I === 'Foil Print' || I === 'No');
+            const isScreenPrint = (I === 'Screen print');
+
+            let plans = {}; // This will hold all valid plans for this loop
+
+            // --- START LOGIC ---
+            if (I !== 'No' && A) plans[4] = addWorkdays(A, 3); // Step 4: Logo Approval
+
+            const step4Act = getAct(4);
+            if ((B === 'OTD' || B === 'Jewellery (OTD)')) {
+                if (step4Act) plans[1] = addWorkdays(step4Act, 6);
+                else if (I === 'No' && A) plans[1] = addWorkdays(A, 6);
             }
 
-            rawValues.push([
-                rowIndex, parseToMySQLDateTime(r[0]), r[1], jobNo, r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], parseToMySQLDate(r[13]), r[14]
-            ]);
-        }
+            const step1Act = getAct(1);
+            if ((B === 'OTD' || B === 'Jewellery (OTD)') && step1Act) {
+                plans[2] = addWorkdays(step1Act, 1);
+            } else if ((B !== 'OTD' || B !== 'Jewellery (OTD)') && I === 'No' && A) {
+                plans[2] = addWorkdays(A, 1);
+            }
 
-        // --- 2. DELETE OLD TASKS FOR CHANGED JOBS ---
-        if (jobsToReset.length > 0) {
-            // This clears the slate so the loop below can regenerate fresh tasks
-            await db.query("DELETE FROM fms_dibiaa_tasks WHERE job_id IN (?)", [jobsToReset]);
-        }
+            if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1);
+            if (!(F === 'Paper Bag' || (F || '').endsWith('Tray'))) {
+                if (getAct(2)) plans[5] = addWorkdays(getAct(2), 4);
+            }
 
-        // --- 3. UPDATE RAW DATA ---
-        if(rawValues.length > 0) {
-            const rawSql = `INSERT INTO fms_dibiaa_raw (sheet_row_index, timestamp, otd_type, job_number, order_by, company_name, box_type, box_style, box_color, printing_type, printing_color, specification, city, quantity, lead_time, repeat_new) 
-                            VALUES ? 
-                            ON DUPLICATE KEY UPDATE 
-                            otd_type=VALUES(otd_type), box_type=VALUES(box_type), printing_type=VALUES(printing_type), 
-                            quantity=VALUES(quantity), company_name=VALUES(company_name), box_style=VALUES(box_style),
-                            box_color=VALUES(box_color), printing_color=VALUES(printing_color), specification=VALUES(specification),
-                            city=VALUES(city), lead_time=VALUES(lead_time), repeat_new=VALUES(repeat_new)`;
-            await db.query(rawSql, [rawValues]);
-        }
+            if (I === 'Foil Print' && getAct(3)) plans[6] = addWorkdays(getAct(3), 3);
+            if (I !== 'Foil Print' && getAct(3)) plans[7] = addWorkdays(getAct(3), 3);
+            else if (getAct(6)) plans[7] = addWorkdays(getAct(6), 3);
 
-        // Refresh job map after raw insert to get new job_ids if any
-        const [jobs] = await db.query("SELECT job_id, sheet_row_index FROM fms_dibiaa_raw");
-        const jobMap = {}; 
-        jobs.forEach(j => jobMap[j.sheet_row_index] = j.job_id);
-        
-        const [allTasks] = await db.query("SELECT job_id, step_id, actual_date FROM fms_dibiaa_tasks");
-        const taskMap = {}; 
-        allTasks.forEach(t => taskMap[`${t.job_id}_${t.step_id}`] = t.actual_date ? dayjs.tz(t.actual_date, "Asia/Kolkata") : null);
+            if (getAct(7)) plans[8] = addWorkdays(getAct(7), 1);
 
-        // --- 4. TASK GENERATION LOOP ---
-        const taskValues = [];
-        for (let i = 0; i < rows.length; i++) {
-            const r = rows[i]; 
-            const rowIndex = 2 + i; 
-            const jobId = jobMap[rowIndex];
-            if(!jobId) continue;
-            
-            // BLANK FIELD CHECK: Skip task generation if core data is missing
-            const isAnyBlank = !r[1] || !r[5] || !r[6] || !r[8] || !r[10];
-            if (isAnyBlank) continue;
+            if (getAct(8)) {
+                const condition = (G === 'Magnetic' || (G || '').startsWith('Sliding Handle') && I === 'Screen print') || (G === 'Magnetic' && isOffsetFoil && hasInner) || (G === 'Magnetic' && hasInner && I === 'Screen print');
+                if (condition) plans[9] = addWorkdays(getAct(8), 1);
+            }
 
-            const getAct = (s) => taskMap[`${jobId}_${s}`];
-            const A = parseDate(r[0]); const B = r[1]; const F = r[5]; const G = r[6]; const I = r[8]; const K = r[10]; const N = parseDate(r[13]);
-            
-            const hasInner = (K || '').toLowerCase().includes('inner'); 
-            const isOffsetFoil = (I === 'Offset Print' || I === 'Foil Print' || I === 'No'); 
-            const isScreenPrint = (I === 'Screen print');
-            
-            let plans = {}; 
-            if (I !== 'No' && A) plans[4] = addWorkdays(A, 3); //logo approval step4
-            
-            const step4Act = getAct(4);
-            if ((B==='OTD' || B==='Jewellery (OTD)')) { if (step4Act) plans[1] = addWorkdays(step4Act, 6); else if (I === 'No' && A) plans[1] = addWorkdays(A, 6); } //Step1 - OTD/Jewellery OTD
-            
-            const step1Act = getAct(1); 
-            if ((B === 'OTD' || B === 'Jewellery (OTD)') && step1Act) { plans[2] = addWorkdays(step1Act, 1); }  //Step2 - Stock Issue
-            else if ((B !== 'OTD' || B !== 'Jewellery (OTD)') && I === 'No' && A ) { plans[2] = addWorkdays(A, 1); }  //Step2 - Stock Issue
-            
-            
-            if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1);  //Step3 - Raw Material Cutting
+            const isTopBottom = G === 'Top-Bottom'; const isSlidingBox = G === 'Sliding Box'; const isMagnetic = G === 'Magnetic';
+            const isSlidingHandle = G === 'Sliding Handle Box'; const isPaperBag = F === 'Paper Bag';
 
-            if (!(F==='Paper Bag' || (F||'').endsWith('Tray'))) { if (getAct(2)) plans[5] = addWorkdays(getAct(2), 4); } //Step5 - Foam Cutting
-
-            if (I === 'Foil Print' && getAct(3)) plans[6] = addWorkdays(getAct(3), 3); //Step6 - Foiling
-
-            if (I !== 'Foil Print' && getAct(3)) plans[7] = addWorkdays(getAct(3), 3); else if (getAct(6)) plans[7] = addWorkdays(getAct(6), 3); //Step7 - Die Cutting
-
-            if (getAct(7)) plans[8] = addWorkdays(getAct(7), 1); 
-
-            if (getAct(8)) { 
-                const condition = (G==='Magnetic' || (G||'').startsWith('Sliding Handle') && I === 'Screen print') || (G==='Magnetic' && isOffsetFoil && hasInner) || (G==='Magnetic' && hasInner && I === 'Screen print'); 
-                if(condition) plans[9] = addWorkdays(getAct(8), 1); 
-            } 
-
-            const isTopBottom = G==='Top-Bottom'; const isSlidingBox = G==='Sliding Box'; const isMagnetic = G==='Magnetic'; 
-            const isSlidingHandle = G==='Sliding Handle Box'; const isPaperBag = F==='Paper Bag'; 
-            
-            let targetDate10 = null; 
+            let targetDate10 = null;
             if (isPaperBag && isScreenPrint) targetDate10 = getAct(12);
             else if (isPaperBag && isOffsetFoil) targetDate10 = getAct(8);
             else if (isMagnetic && hasInner) targetDate10 = getAct(11);
@@ -518,9 +499,9 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             else if (isTopBottom || isSlidingBox) targetDate10 = getAct(8);
             if (targetDate10) plans[10] = addWorkdays(targetDate10, 2);
 
-            const base11 = getAct(10) || getAct(9) || getAct(8); 
+            const base11 = getAct(10) || getAct(9) || getAct(8);
             if (base11 && hasInner) plans[11] = addWorkdays(base11, 1);
-            
+
             let targetDate12 = null;
             if (isPaperBag && isScreenPrint) targetDate12 = getAct(8);
             else if ((isMagnetic || isSlidingHandle) && I === 'Screen print') targetDate12 = getAct(9);
@@ -530,35 +511,54 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             if (targetDate12) plans[12] = addWorkdays(targetDate12, 1);
 
             const isboxtypecon = (F === 'Foam' || F === 'Cards' || F === 'Hooks');
-            const base13 = getAct(12) || getAct(11) || getAct(10); 
-            if(isboxtypecon) plans[13] = addWorkdays(getAct(8),1);
+            const base13 = getAct(12) || getAct(11) || getAct(10);
+            if (isboxtypecon) plans[13] = addWorkdays(getAct(8), 1);
             else if (base13) plans[13] = addWorkdays(base13, 1);
 
-            if (getAct(13)) plans[14] = addWorkdays(getAct(13), 1); 
-            if (getAct(14)) plans[15] = addWorkdays(getAct(14), 1); 
+            if (getAct(13)) plans[14] = addWorkdays(getAct(13), 1);
+            if (getAct(14)) plans[15] = addWorkdays(getAct(14), 1);
+            
+            // Step 16: Dispatch - Always follows the Lead Time if provided
             if (N) plans[16] = N;
 
-            for (let s = 1; s <= 16; s++) { 
-                if (plans[s]) { 
-                    const isValid = dayjs.isDayjs(plans[s]) && plans[s].isValid();
-                    const sqlDate = isValid ? plans[s].format('YYYY-MM-DD HH:mm:ss') : null; 
-                    if(sqlDate) taskValues.push([jobId, s, sqlDate, 'Pending']); 
-                } 
+            // --- 4. DATA SYNCHRONIZATION (CLEANUP VS UPDATE) ---
+            for (let s = 1; s <= 16; s++) {
+                const key = `${jobId}_${s}`;
+                const existsInDB = taskMap[key];
+
+                if (plans[s]) {
+                    // Logic says task should exist -> Add to update list
+                    const sqlDate = plans[s].format('YYYY-MM-DD HH:mm:ss');
+                    taskUpdates.push([jobId, s, sqlDate, 'Pending']);
+                } else {
+                    // Logic says task should NOT exist -> Add to delete list if it exists in DB
+                    if (existsInDB) {
+                        tasksToDelete.push(existsInDB.id);
+                    }
+                }
             }
         }
 
-        // --- 5. BULK UPSERT ---
-        if(taskValues.length > 0) {
+        // 5. EXECUTE DATABASE CHANGES
+        // Delete invalid tasks
+        if (tasksToDelete.length > 0) {
+            await db.query("DELETE FROM fms_dibiaa_tasks WHERE id IN (?)", [tasksToDelete]);
+        }
+
+        // Upsert valid tasks
+        if (taskUpdates.length > 0) {
             const taskSql = `INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) 
                             VALUES ? 
                             ON DUPLICATE KEY UPDATE 
                             plan_date = IF(status = 'Completed', plan_date, VALUES(plan_date))`;
-            await db.query(taskSql, [taskValues]);
+            await db.query(taskSql, [taskUpdates]);
         }
-        res.json({message: `Sync Complete. Processed ${rows.length} rows. Reset ${jobsToReset.length} modified jobs.`});
-    } catch(e) { 
-        console.error("Sync Error:", e); 
-        res.status(500).json({error: e.message}); 
+
+        res.json({ message: `Sync Complete. Processed ${rows.length} jobs. Deleted ${tasksToDelete.length} obsolete tasks.` });
+
+    } catch (e) {
+        console.error("Sync Error:", e);
+        res.status(500).json({ error: e.message });
     }
 });
 
