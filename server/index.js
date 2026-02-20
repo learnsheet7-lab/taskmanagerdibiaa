@@ -468,7 +468,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
                 plans[2] = addWorkdays(step1Act, 1);
             } else if ((B !== 'OTD' || B !== 'Jewellery (OTD)') && I === 'No' && A) {
                 plans[2] = addWorkdays(A, 1);
-            }else if ((B !== 'OTD' || B !== 'Jewellery (OTD)') && I === 'No' && step4Act){
+            }else if ((B !== 'OTD' || B !== 'Jewellery (OTD)') && I !== 'No' && step4Act){
                 plans[2]=addWorkdays(step4Act, 1);
             }
 
@@ -479,7 +479,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             }
 
             if (I === 'Foil Print' && getAct(3)) plans[6] = addWorkdays(getAct(3), 3);
-            
+
             if (I !== 'Foil Print' && getAct(3)) plans[7] = addWorkdays(getAct(3), 3);
             else if (getAct(6)) plans[7] = addWorkdays(getAct(6), 3);
 
