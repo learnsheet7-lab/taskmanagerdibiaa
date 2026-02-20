@@ -480,19 +480,24 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             const isScreenPrint = (I === 'Screen print');
             
             let plans = {}; 
-            if (I !== 'No' && A) plans[4] = addWorkdays(A, 3);
+            if (I !== 'No' && A) plans[4] = addWorkdays(A, 3); //logo approval step4
+            
             const step4Act = getAct(4);
-            if ((B==='OTD' || B==='Jewellery (OTD)')) { if (step4Act) plans[1] = addWorkdays(step4Act, 6); else if (I === 'No' && A) plans[1] = addWorkdays(A, 3); }
+            if ((B==='OTD' || B==='Jewellery (OTD)')) { if (step4Act) plans[1] = addWorkdays(step4Act, 6); else if (I === 'No' && A) plans[1] = addWorkdays(A, 6); } //Step1 - OTD/Jewellery OTD
             
             const step1Act = getAct(1); 
-            if ((B === 'OTD' || B === 'Jewellery (OTD)') && step1Act) { plans[2] = addWorkdays(step1Act, 1); } 
-            else if (I === 'No' && A ) { plans[2] = addWorkdays(A, 1); } 
-            else if (step4Act) { plans[2] = addWorkdays(step4Act, 1); }
+            if ((B === 'OTD' || B === 'Jewellery (OTD)') && step1Act) { plans[2] = addWorkdays(step1Act, 1); }  //Step2 - Stock Issue
+            else if ((B !== 'OTD' || B !== 'Jewellery (OTD)') && I === 'No' && A ) { plans[2] = addWorkdays(A, 1); }  //Step2 - Stock Issue
             
-            if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1); 
-            if (!(F==='Paper Bag' || (F||'').endsWith('Tray'))) { if (getAct(2)) plans[5] = addWorkdays(getAct(2), 3); }
-            if (I === 'Foil Print' && getAct(3)) plans[6] = addWorkdays(getAct(3), 3);
-            if (I !== 'Foil Print' && getAct(3)) plans[7] = addWorkdays(getAct(3), 3); else if (getAct(6)) plans[7] = addWorkdays(getAct(6), 3);
+            
+            if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1);  //Step3 - Raw Material Cutting
+
+            if (!(F==='Paper Bag' || (F||'').endsWith('Tray'))) { if (getAct(2)) plans[5] = addWorkdays(getAct(2), 4); } //Step5 - Foam Cutting
+
+            if (I === 'Foil Print' && getAct(3)) plans[6] = addWorkdays(getAct(3), 3); //Step6 - Foiling
+
+            if (I !== 'Foil Print' && getAct(3)) plans[7] = addWorkdays(getAct(3), 3); else if (getAct(6)) plans[7] = addWorkdays(getAct(6), 3); //Step7 - Die Cutting
+
             if (getAct(7)) plans[8] = addWorkdays(getAct(7), 1); 
 
             if (getAct(8)) { 
