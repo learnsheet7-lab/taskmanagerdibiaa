@@ -399,7 +399,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
         const rows = response.data.values;
         if (!rows || rows.length === 0) return res.json({ message: "No data found" });
 
-        // 1. UPDATE RAW DATA (Always update raw details first)
+        // 1. UPDATE RAW DATA
         const rawValues = rows.map((r, i) => [
             2 + i, parseToMySQLDateTime(r[0]), r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], parseToMySQLDate(r[13]), r[14]
         ]);
@@ -413,13 +413,13 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
                         city=VALUES(city), lead_time=VALUES(lead_time), repeat_new=VALUES(repeat_new)`;
         await db.query(rawSql, [rawValues]);
 
-        // 2. PREPARE MAPS FOR CALCULATION
+        // 2. PREPARE MAPS
         const [jobs] = await db.query("SELECT job_id, sheet_row_index FROM fms_dibiaa_raw");
         const jobMap = {};
         jobs.forEach(j => jobMap[j.sheet_row_index] = j.job_id);
 
         const [allTasks] = await db.query("SELECT id, job_id, step_id, actual_date FROM fms_dibiaa_tasks");
-        const taskMap = {}; // Maps 'jobId_stepId' to the full task object
+        const taskMap = {};
         allTasks.forEach(t => {
             taskMap[`${t.job_id}_${t.step_id}`] = {
                 id: t.id,
@@ -430,7 +430,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
         const taskUpdates = [];
         const tasksToDelete = [];
 
-        // 3. RE-EVALUATE EVERY ROW LOGICALLY
+        // 3. RE-EVALUATE LOGIC
         for (let i = 0; i < rows.length; i++) {
             const r = rows[i];
             const rowIndex = 2 + i;
@@ -439,23 +439,22 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
 
             const getAct = (s) => taskMap[`${jobId}_${s}`]?.actual || null;
 
-            // Variables from Sheet
-            const A = parseDate(r[0]); // Timestamp
-            const B = r[1];           // OTD Type
-            const F = r[5];           // Box Type
-            const G = r[6];           // Box Style
-            const I = r[8];           // Printing Type
-            const K = r[10];          // Specification
-            const N = parseDate(r[13]); // Lead Time
+            const A = parseDate(r[0]); 
+            const B = r[1];           
+            const F = r[5];           
+            const G = r[6];           
+            const I = r[8];           
+            const K = r[10];          
+            const N = parseDate(r[13]); 
 
             const hasInner = (K || '').toLowerCase().includes('inner');
             const isOffsetFoil = (I === 'Offset Print' || I === 'Foil Print' || I === 'No');
             const isScreenPrint = (I === 'Screen print');
 
-            let plans = {}; // This will hold all valid plans for this loop
+            let plans = {}; 
 
             // --- START LOGIC ---
-            if (I !== 'No' && A) plans[4] = addWorkdays(A, 3); // Step 4: Logo Approval
+            if (I !== 'No' && A) plans[4] = addWorkdays(A, 3); 
 
             const step4Act = getAct(4);
             if ((B === 'OTD' || B === 'Jewellery (OTD)')) {
@@ -468,8 +467,8 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
                 plans[2] = addWorkdays(step1Act, 1);
             } else if ((B !== 'OTD' || B !== 'Jewellery (OTD)') && I === 'No' && A) {
                 plans[2] = addWorkdays(A, 1);
-            }else if ((B !== 'OTD' || B !== 'Jewellery (OTD)') && I !== 'No' && step4Act){
-                plans[2]=addWorkdays(step4Act, 1);
+            } else if ((B !== 'OTD' || B !== 'Jewellery (OTD)') && I !== 'No' && step4Act){
+                plans[2] = addWorkdays(step4Act, 1);
             }
 
             if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1);
@@ -522,21 +521,21 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             if (getAct(13)) plans[14] = addWorkdays(getAct(13), 1);
             if (getAct(14)) plans[15] = addWorkdays(getAct(14), 1);
             
-            // Step 16: Dispatch - Always follows the Lead Time if provided
             if (N) plans[16] = N;
 
-            // --- 4. DATA SYNCHRONIZATION (CLEANUP VS UPDATE) ---
+            // --- 4. DATA SYNCHRONIZATION WITH "ACTUAL" CHECK ---
             for (let s = 1; s <= 16; s++) {
                 const key = `${jobId}_${s}`;
                 const existsInDB = taskMap[key];
 
                 if (plans[s]) {
-                    // Logic says task should exist -> Add to update list
+                    // Logic says task should exist
                     const sqlDate = plans[s].format('YYYY-MM-DD HH:mm:ss');
                     taskUpdates.push([jobId, s, sqlDate, 'Pending']);
                 } else {
-                    // Logic says task should NOT exist -> Add to delete list if it exists in DB
-                    if (existsInDB) {
+                    // Logic says task should NOT exist.
+                    // SAFETY: Only delete if it exists AND actual_date is NULL (not completed).
+                    if (existsInDB && !existsInDB.actual) {
                         tasksToDelete.push(existsInDB.id);
                     }
                 }
@@ -544,12 +543,10 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
         }
 
         // 5. EXECUTE DATABASE CHANGES
-        // Delete invalid tasks
         if (tasksToDelete.length > 0) {
             await db.query("DELETE FROM fms_dibiaa_tasks WHERE id IN (?)", [tasksToDelete]);
         }
 
-        // Upsert valid tasks
         if (taskUpdates.length > 0) {
             const taskSql = `INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) 
                             VALUES ? 
@@ -558,7 +555,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             await db.query(taskSql, [taskUpdates]);
         }
 
-        res.json({ message: `Sync Complete. Processed ${rows.length} jobs. Deleted ${tasksToDelete.length} obsolete tasks.` });
+        res.json({ message: `Sync Complete. Deleted ${tasksToDelete.length} obsolete tasks.` });
 
     } catch (e) {
         console.error("Sync Error:", e);
