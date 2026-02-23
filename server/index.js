@@ -552,11 +552,16 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
         INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) 
         VALUES ? 
         ON DUPLICATE KEY UPDATE 
-        plan_date = IF(
-            status = 'Completed' OR (actual_date IS NOT NULL AND actual_date != ''), 
-            plan_date, 
-            VALUES(plan_date)
-        )`;
+        plan_date = CASE 
+            -- 1. If the existing plan is blank, UPDATE IT with the new calculation
+            WHEN plan_date IS NULL OR plan_date = '' THEN VALUES(plan_date)
+            
+            -- 2. If it's already completed, KEEP the old plan date
+            WHEN status = 'Completed' THEN plan_date
+            
+            -- 3. Otherwise, UPDATE to the new calculated plan date
+            ELSE VALUES(plan_date)
+        END`;
     
     await db.query(taskSql, [taskUpdates]);
 }
