@@ -701,21 +701,28 @@ app.post('/fms/restore-logs', upload.single('file'), async (req, res) => {
             .on('end', async () => {
                 const [jobs] = await db.query("SELECT job_id, job_number FROM fms_dibiaa_raw");
                 const jobMap = {};
-                jobs.forEach(j => {
-                    if (j.job_number) jobMap[j.job_number.toString()] = j.job_id;
-                });
+                jobs.forEach(j => { if (j.job_number) jobMap[j.job_number.toString()] = j.job_id; });
 
                 const updateRows = [];
                 for (const row of results) {
-                    // FIX: Use optional chaining and check if job_number exists before calling .toString()
-                    const rawJobNo = row.job_number || row['job_number'] || row['Job Number'];
+                    const rawJobNo = row.job_number || row['job_number'];
                     const jobId = rawJobNo ? jobMap[rawJobNo.toString().trim()] : null;
 
                     if (jobId) {
+                        // --- CRITICAL DATE FORMATTING FIX ---
+                        let formattedDate = null;
+                        if (row.actual_date) {
+                            // This force-formats the date to 2026-02-23 15:38:46
+                            const dateObj = dayjs(row.actual_date);
+                            if (dateObj.isValid()) {
+                                formattedDate = dateObj.format('YYYY-MM-DD HH:mm:ss');
+                            }
+                        }
+
                         updateRows.push([
                             jobId,
-                            parseInt(row.step_id || row['step_id']),
-                            parseToMySQLDateTime(row.actual_date || row['actual_date']),
+                            parseInt(row.step_id),
+                            formattedDate, 
                             row.delay_hours || 0,
                             row.delay_reason || '',
                             row.contractor_printer || row['Contractor/Printer'] || '',
@@ -732,18 +739,18 @@ app.post('/fms/restore-logs', upload.single('file'), async (req, res) => {
                         VALUES ? 
                         ON DUPLICATE KEY UPDATE 
                         actual_date = VALUES(actual_date),
+                        status = VALUES(status),
                         delay_hours = VALUES(delay_hours),
                         delay_reason = VALUES(delay_reason),
                         custom_field_1 = VALUES(custom_field_1),
-                        custom_field_2 = VALUES(custom_field_2),
-                        status = VALUES(status)`;
+                        custom_field_2 = VALUES(custom_field_2)`;
 
                     await db.query(sql, [updateRows]);
                     fs.unlinkSync(req.file.path);
-                    res.json({ message: `Successfully restored ${updateRows.length} entries.` });
+                    res.json({ message: `Restored ${updateRows.length} entries with correct MySQL formatting.` });
                 } else {
-                    fs.unlinkSync(req.file.path);
-                    res.status(400).json({ message: "No matching Job Numbers found. Check your CSV headers." });
+                    if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+                    res.status(400).json({ message: "No matching data found." });
                 }
             });
     } catch (e) {
@@ -754,12 +761,11 @@ app.post('/fms/restore-logs', upload.single('file'), async (req, res) => {
 
 
 app.get('/fms/download-sample-csv', (req, res) => {
-    // These are the EXACT headers the code is looking for
     const headers = "job_number,step_id,actual_date,delay_hours,delay_reason,contractor_printer,quantity,status\n";
-    const sampleRow = "14503,8,2026-02-23 10:00:00,2,Machine Down,Shahjad ji,500,Completed";
+    // Now showing the exact format: YYYY-MM-DD HH:mm:ss
+    const sampleRow = "14503,8,2026-02-23 15:38:46,2,Machine Down,Shahjad ji,500,Completed";
     
     const csvContent = headers + sampleRow;
-    
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', 'attachment; filename=fms_restore_sample.csv');
     res.status(200).send(csvContent);
