@@ -690,6 +690,64 @@ app.get('/fms/rolling-report', async (req, res) => {
     }
 });
 
+app.post('/fms/restore-logs', upload.single('file'), async (req, res) => {
+    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+
+    try {
+        const results = [];
+        fs.createReadStream(req.file.path)
+            .pipe(csv())
+            .on('data', (data) => results.push(data))
+            .on('end', async () => {
+                // 1. Fetch current Job Map to convert Job Number -> Job ID
+                const [jobs] = await db.query("SELECT job_id, job_number FROM fms_dibiaa_raw");
+                const jobMap = {};
+                jobs.forEach(j => jobMap[j.job_number.toString()] = j.job_id);
+
+                const updateRows = [];
+                for (const row of results) {
+                    const jobId = jobMap[row.job_number.toString()];
+                    if (jobId) {
+                        updateRows.push([
+                            jobId,
+                            parseInt(row.step_id),
+                            parseToMySQLDateTime(row.actual_date), // Uses your existing helper
+                            row.delay_hours || 0,
+                            row.delay_reason || '',
+                            row.contractor_printer || row['Contractor/Printer'] || '',
+                            row.quantity || 0,
+                            row.status || 'Completed'
+                        ]);
+                    }
+                }
+
+                if (updateRows.length > 0) {
+                    // 2. Perform Bulk Update using ON DUPLICATE KEY
+                    // Note: This assumes you have a UNIQUE constraint on (job_id, step_id)
+                    const sql = `
+                        INSERT INTO fms_dibiaa_tasks 
+                        (job_id, step_id, actual_date, delay_hours, delay_reason, custom_field_1, custom_field_2, status) 
+                        VALUES ? 
+                        ON DUPLICATE KEY UPDATE 
+                        actual_date = VALUES(actual_date),
+                        delay_hours = VALUES(delay_hours),
+                        delay_reason = VALUES(delay_reason),
+                        custom_field_1 = VALUES(custom_field_1),
+                        custom_field_2 = VALUES(custom_field_2),
+                        status = VALUES(status)`;
+
+                    await db.query(sql, [updateRows]);
+                }
+
+                fs.unlinkSync(req.file.path); // Clean up temp file
+                res.json({ message: `Successfully restored ${updateRows.length} task entries.` });
+            });
+    } catch (e) {
+        if (req.file) fs.unlinkSync(req.file.path);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 app.post('/fms/pc-summary', async (req, res) => {
     try {
         const { clients, steps, jobNumbers, statuses } = req.body;
