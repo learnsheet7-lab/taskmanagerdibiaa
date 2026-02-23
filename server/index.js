@@ -699,19 +699,23 @@ app.post('/fms/restore-logs', upload.single('file'), async (req, res) => {
             .pipe(csv())
             .on('data', (data) => results.push(data))
             .on('end', async () => {
-                // 1. Fetch current Job Map to convert Job Number -> Job ID
                 const [jobs] = await db.query("SELECT job_id, job_number FROM fms_dibiaa_raw");
                 const jobMap = {};
-                jobs.forEach(j => jobMap[j.job_number.toString()] = j.job_id);
+                jobs.forEach(j => {
+                    if (j.job_number) jobMap[j.job_number.toString()] = j.job_id;
+                });
 
                 const updateRows = [];
                 for (const row of results) {
-                    const jobId = jobMap[row.job_number.toString()];
+                    // FIX: Use optional chaining and check if job_number exists before calling .toString()
+                    const rawJobNo = row.job_number || row['job_number'] || row['Job Number'];
+                    const jobId = rawJobNo ? jobMap[rawJobNo.toString().trim()] : null;
+
                     if (jobId) {
                         updateRows.push([
                             jobId,
-                            parseInt(row.step_id),
-                            parseToMySQLDateTime(row.actual_date), // Uses your existing helper
+                            parseInt(row.step_id || row['step_id']),
+                            parseToMySQLDateTime(row.actual_date || row['actual_date']),
                             row.delay_hours || 0,
                             row.delay_reason || '',
                             row.contractor_printer || row['Contractor/Printer'] || '',
@@ -722,8 +726,6 @@ app.post('/fms/restore-logs', upload.single('file'), async (req, res) => {
                 }
 
                 if (updateRows.length > 0) {
-                    // 2. Perform Bulk Update using ON DUPLICATE KEY
-                    // Note: This assumes you have a UNIQUE constraint on (job_id, step_id)
                     const sql = `
                         INSERT INTO fms_dibiaa_tasks 
                         (job_id, step_id, actual_date, delay_hours, delay_reason, custom_field_1, custom_field_2, status) 
@@ -737,13 +739,15 @@ app.post('/fms/restore-logs', upload.single('file'), async (req, res) => {
                         status = VALUES(status)`;
 
                     await db.query(sql, [updateRows]);
+                    fs.unlinkSync(req.file.path);
+                    res.json({ message: `Successfully restored ${updateRows.length} entries.` });
+                } else {
+                    fs.unlinkSync(req.file.path);
+                    res.status(400).json({ message: "No matching Job Numbers found. Check your CSV headers." });
                 }
-
-                fs.unlinkSync(req.file.path); // Clean up temp file
-                res.json({ message: `Successfully restored ${updateRows.length} task entries.` });
             });
     } catch (e) {
-        if (req.file) fs.unlinkSync(req.file.path);
+        if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
         res.status(500).json({ error: e.message });
     }
 });
