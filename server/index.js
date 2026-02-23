@@ -752,6 +752,19 @@ app.post('/fms/restore-logs', upload.single('file'), async (req, res) => {
     }
 });
 
+
+app.get('/fms/download-sample-csv', (req, res) => {
+    // These are the EXACT headers the code is looking for
+    const headers = "job_number,step_id,actual_date,delay_hours,delay_reason,contractor_printer,quantity,status\n";
+    const sampleRow = "14503,8,2026-02-23 10:00:00,2,Machine Down,Shahjad ji,500,Completed";
+    
+    const csvContent = headers + sampleRow;
+    
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename=fms_restore_sample.csv');
+    res.status(200).send(csvContent);
+});
+
 app.post('/fms/pc-summary', async (req, res) => {
     try {
         const { clients, steps, jobNumbers, statuses } = req.body;
