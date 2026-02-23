@@ -690,6 +690,127 @@ app.get('/fms/rolling-report', async (req, res) => {
     }
 });
 
+// --- SHARED FMS SYNC FUNCTION ---
+// This function recalculates plans for all jobs based on current actual dates
+const performFmsSync = async () => {
+    const SHEET_ID = '1C3qHR_jbjHgOQCM7MwRB4AZXtuY2W9jLpqIAEbYFWkQ';
+    const auth = getAuth();
+    const sheets = google.sheets({ version: 'v4', auth });
+    const response = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `fmstask!A2:O` });
+    const rows = response.data.values;
+    if (!rows || rows.length === 0) return { message: "No data found" };
+
+    // 1. Refresh Job Map and Task Map
+    const [jobs] = await db.query("SELECT job_id, sheet_row_index FROM fms_dibiaa_raw");
+    const jobMap = {};
+    jobs.forEach(j => jobMap[j.sheet_row_index] = j.job_id);
+
+    const [allTasks] = await db.query("SELECT id, job_id, step_id, actual_date FROM fms_dibiaa_tasks");
+    const taskMap = {};
+    allTasks.forEach(t => {
+        taskMap[`${t.job_id}_${t.step_id}`] = {
+            id: t.id,
+            actual: t.actual_date ? dayjs.tz(t.actual_date, "Asia/Kolkata") : null
+        };
+    });
+
+    const taskUpdates = [];
+    const tasksToDelete = [];
+
+    // 2. RE-EVALUATE EVERY ROW
+    for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        const jobId = jobMap[2 + i];
+        if (!jobId) continue;
+
+        const getAct = (s) => taskMap[`${jobId}_${s}`]?.actual || null;
+
+        const A = parseDate(r[0]); const B = r[1]; const F = r[5]; const G = r[6]; const I = r[8]; const K = r[10]; const N = parseDate(r[13]);
+        const hasInner = (K || '').toLowerCase().includes('inner');
+        const isOffsetFoil = (I === 'Offset Print' || I === 'Foil Print' || I === 'No');
+        const isScreenPrint = (I === 'Screen print');
+
+        let plans = {}; 
+        if (I !== 'No' && A) plans[4] = addWorkdays(A, 3); 
+        const step4Act = getAct(4);
+
+        if ((B === 'OTD' || B === 'Jewellery (OTD)')) {
+            if (step4Act) plans[1] = addWorkdays(step4Act, 6);
+            else if (I === 'No' && A) plans[1] = addWorkdays(A, 6);
+        }
+
+        const step1Act = getAct(1);
+        if ((B === 'OTD' || B === 'Jewellery (OTD)') && step1Act) {
+            plans[2] = addWorkdays(step1Act, 1);
+        } else if ((B !== 'OTD' || B !== 'Jewellery (OTD)') && I === 'No' && A) {
+            plans[2] = addWorkdays(A, 1);
+        } else if (step4Act) {
+            plans[2] = addWorkdays(step4Act, 1); // Fixed: Step 2 follows Step 4 if not OTD
+        }
+
+        if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1);
+        if (!(F === 'Paper Bag' || (F || '').endsWith('Tray'))) { if (getAct(2)) plans[5] = addWorkdays(getAct(2), 4); }
+        if (I === 'Foil Print' && getAct(3)) plans[6] = addWorkdays(getAct(3), 3);
+        if (I !== 'Foil Print' && getAct(3)) plans[7] = addWorkdays(getAct(3), 3); else if (getAct(6)) plans[7] = addWorkdays(getAct(6), 3);
+        if (getAct(7)) plans[8] = addWorkdays(getAct(7), 1);
+        
+        if (getAct(8)) {
+            const condition = (G === 'Magnetic' || (G || '').startsWith('Sliding Handle') && I === 'Screen print') || (G === 'Magnetic' && isOffsetFoil && hasInner) || (G === 'Magnetic' && hasInner && I === 'Screen print');
+            if (condition) plans[9] = addWorkdays(getAct(8), 1);
+        }
+
+        const isTopBottom = G === 'Top-Bottom'; const isSlidingBox = G === 'Sliding Box'; const isMagnetic = G === 'Magnetic';
+        const isSlidingHandle = G === 'Sliding Handle Box'; const isPaperBag = F === 'Paper Bag';
+        let targetDate10 = null;
+        if (isPaperBag && isScreenPrint) targetDate10 = getAct(12);
+        else if (isPaperBag && isOffsetFoil) targetDate10 = getAct(8);
+        else if (isMagnetic && hasInner) targetDate10 = getAct(11);
+        else if ((isMagnetic || isSlidingHandle) && isOffsetFoil) targetDate10 = getAct(8);
+        else if ((isMagnetic || isSlidingHandle) && isScreenPrint) targetDate10 = getAct(12);
+        else if (isTopBottom && hasInner) targetDate10 = getAct(11);
+        else if (isTopBottom || isSlidingBox) targetDate10 = getAct(8);
+        if (targetDate10) plans[10] = addWorkdays(targetDate10, 2);
+
+        const base11 = getAct(10) || getAct(9) || getAct(8);
+        if (base11 && hasInner) plans[11] = addWorkdays(base11, 1);
+
+        let targetDate12 = null;
+        if (isPaperBag && isScreenPrint) targetDate12 = getAct(8);
+        else if ((isMagnetic || isSlidingHandle) && I === 'Screen print') targetDate12 = getAct(9);
+        else if ((isMagnetic && hasInner) && I === 'Screen print') targetDate12 = getAct(9);
+        else if ((isTopBottom && hasInner) && I === 'Screen print') targetDate12 = getAct(10);
+        else if ((isTopBottom || isSlidingBox) && I === 'Screen print') targetDate12 = getAct(10);
+        if (targetDate12) plans[12] = addWorkdays(targetDate12, 1);
+
+        const isboxtypecon = (F === 'Foam' || F === 'Cards' || F === 'Hooks');
+        const base13 = getAct(12) || getAct(11) || getAct(10);
+        if (isboxtypecon) plans[13] = addWorkdays(getAct(8), 1);
+        else if (base13) plans[13] = addWorkdays(base13, 1);
+
+        if (getAct(13)) plans[14] = addWorkdays(getAct(13), 1);
+        if (getAct(14)) plans[15] = addWorkdays(getAct(14), 1);
+        if (N) plans[16] = N;
+
+        for (let s = 1; s <= 16; s++) {
+            const key = `${jobId}_${s}`;
+            const existsInDB = taskMap[key];
+            if (plans[s]) {
+                taskUpdates.push([jobId, s, plans[s].format('YYYY-MM-DD HH:mm:ss'), 'Pending']);
+            } else if (existsInDB && !existsInDB.actual) {
+                tasksToDelete.push(existsInDB.id);
+            }
+        }
+    }
+
+    // 3. APPLY UPDATES
+    if (tasksToDelete.length > 0) await db.query("DELETE FROM fms_dibiaa_tasks WHERE id IN (?)", [tasksToDelete]);
+    if (taskUpdates.length > 0) {
+        await db.query(`INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) VALUES ? ON DUPLICATE KEY UPDATE plan_date = IF(status = 'Completed', plan_date, VALUES(plan_date))`, [taskUpdates]);
+    }
+    return true;
+};
+
+
 app.post('/fms/restore-logs', upload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
 
@@ -709,14 +830,10 @@ app.post('/fms/restore-logs', upload.single('file'), async (req, res) => {
                     const jobId = rawJobNo ? jobMap[rawJobNo.toString().trim()] : null;
 
                     if (jobId) {
-                        // --- CRITICAL DATE FORMATTING FIX ---
                         let formattedDate = null;
                         if (row.actual_date) {
-                            // This force-formats the date to 2026-02-23 15:38:46
                             const dateObj = dayjs(row.actual_date);
-                            if (dateObj.isValid()) {
-                                formattedDate = dateObj.format('YYYY-MM-DD HH:mm:ss');
-                            }
+                            if (dateObj.isValid()) formattedDate = dateObj.format('YYYY-MM-DD HH:mm:ss');
                         }
 
                         updateRows.push([
@@ -733,21 +850,15 @@ app.post('/fms/restore-logs', upload.single('file'), async (req, res) => {
                 }
 
                 if (updateRows.length > 0) {
-                    const sql = `
-                        INSERT INTO fms_dibiaa_tasks 
-                        (job_id, step_id, actual_date, delay_hours, delay_reason, custom_field_1, custom_field_2, status) 
-                        VALUES ? 
-                        ON DUPLICATE KEY UPDATE 
-                        actual_date = VALUES(actual_date),
-                        status = VALUES(status),
-                        delay_hours = VALUES(delay_hours),
-                        delay_reason = VALUES(delay_reason),
-                        custom_field_1 = VALUES(custom_field_1),
-                        custom_field_2 = VALUES(custom_field_2)`;
-
+                    const sql = `INSERT INTO fms_dibiaa_tasks (job_id, step_id, actual_date, delay_hours, delay_reason, custom_field_1, custom_field_2, status) 
+                                 VALUES ? ON DUPLICATE KEY UPDATE actual_date = VALUES(actual_date), status = VALUES(status), delay_hours = VALUES(delay_hours), delay_reason = VALUES(delay_reason), custom_field_1 = VALUES(custom_field_1), custom_field_2 = VALUES(custom_field_2)`;
                     await db.query(sql, [updateRows]);
+
+                    // --- THE FIX: RUN THE BRAIN ---
+                    await performFmsSync(); 
+
                     fs.unlinkSync(req.file.path);
-                    res.json({ message: `Restored ${updateRows.length} entries with correct MySQL formatting.` });
+                    res.json({ message: `Restored ${updateRows.length} entries and recalculated all Plan Dates.` });
                 } else {
                     if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
                     res.status(400).json({ message: "No matching data found." });
@@ -758,7 +869,6 @@ app.post('/fms/restore-logs', upload.single('file'), async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
-
 
 app.get('/fms/download-sample-csv', (req, res) => {
     const headers = "job_number,step_id,actual_date,delay_hours,delay_reason,contractor_printer,quantity,status\n";
