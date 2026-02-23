@@ -692,6 +692,7 @@ app.get('/fms/rolling-report', async (req, res) => {
 
 // --- SHARED FMS SYNC FUNCTION ---
 // This function recalculates plans for all jobs based on current actual dates
+// --- SHARED FMS SYNC FUNCTION ---
 const performFmsSync = async () => {
     const SHEET_ID = '1C3qHR_jbjHgOQCM7MwRB4AZXtuY2W9jLpqIAEbYFWkQ';
     const auth = getAuth();
@@ -705,6 +706,7 @@ const performFmsSync = async () => {
     const jobMap = {};
     jobs.forEach(j => jobMap[j.sheet_row_index] = j.job_id);
 
+    // Fetch tasks to get actual dates
     const [allTasks] = await db.query("SELECT id, job_id, step_id, actual_date FROM fms_dibiaa_tasks");
     const taskMap = {};
     allTasks.forEach(t => {
@@ -717,7 +719,7 @@ const performFmsSync = async () => {
     const taskUpdates = [];
     const tasksToDelete = [];
 
-    // 2. RE-EVALUATE EVERY ROW
+    // 2. RE-EVALUATE EVERY ROW LOGICALLY
     for (let i = 0; i < rows.length; i++) {
         const r = rows[i];
         const jobId = jobMap[2 + i];
@@ -731,6 +733,8 @@ const performFmsSync = async () => {
         const isScreenPrint = (I === 'Screen print');
 
         let plans = {}; 
+        
+        // --- LOGIC CALCULATION ---
         if (I !== 'No' && A) plans[4] = addWorkdays(A, 3); 
         const step4Act = getAct(4);
 
@@ -745,7 +749,7 @@ const performFmsSync = async () => {
         } else if ((B !== 'OTD' || B !== 'Jewellery (OTD)') && I === 'No' && A) {
             plans[2] = addWorkdays(A, 1);
         } else if (step4Act) {
-            plans[2] = addWorkdays(step4Act, 1); // Fixed: Step 2 follows Step 4 if not OTD
+            plans[2] = addWorkdays(step4Act, 1);
         }
 
         if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1);
@@ -791,6 +795,7 @@ const performFmsSync = async () => {
         if (getAct(14)) plans[15] = addWorkdays(getAct(14), 1);
         if (N) plans[16] = N;
 
+        // 3. GENERATE UPDATE DATA
         for (let s = 1; s <= 16; s++) {
             const key = `${jobId}_${s}`;
             const existsInDB = taskMap[key];
@@ -802,14 +807,18 @@ const performFmsSync = async () => {
         }
     }
 
-    // 3. APPLY UPDATES
+    // 4. DATABASE UPDATES
     if (tasksToDelete.length > 0) await db.query("DELETE FROM fms_dibiaa_tasks WHERE id IN (?)", [tasksToDelete]);
     if (taskUpdates.length > 0) {
-        await db.query(`INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) VALUES ? ON DUPLICATE KEY UPDATE plan_date = IF(status = 'Completed', plan_date, VALUES(plan_date))`, [taskUpdates]);
+        // REMOVED the IF(status = 'Completed') rule to allow for full recalculation based on actuals
+        const taskSql = `INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) 
+                         VALUES ? 
+                         ON DUPLICATE KEY UPDATE 
+                         plan_date = VALUES(plan_date)`;
+        await db.query(taskSql, [taskUpdates]);
     }
     return true;
 };
-
 
 app.post('/fms/restore-logs', upload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
@@ -836,6 +845,9 @@ app.post('/fms/restore-logs', upload.single('file'), async (req, res) => {
                             if (dateObj.isValid()) formattedDate = dateObj.format('YYYY-MM-DD HH:mm:ss');
                         }
 
+                        // Determine status based on presence of actual date
+                        const rowStatus = (formattedDate && formattedDate !== "") ? 'Completed' : 'Pending';
+
                         updateRows.push([
                             jobId,
                             parseInt(row.step_id),
@@ -844,21 +856,30 @@ app.post('/fms/restore-logs', upload.single('file'), async (req, res) => {
                             row.delay_reason || '',
                             row.contractor_printer || row['Contractor/Printer'] || '',
                             row.quantity || 0,
-                            row.status || 'Completed'
+                            rowStatus
                         ]);
                     }
                 }
 
                 if (updateRows.length > 0) {
-                    const sql = `INSERT INTO fms_dibiaa_tasks (job_id, step_id, actual_date, delay_hours, delay_reason, custom_field_1, custom_field_2, status) 
-                                 VALUES ? ON DUPLICATE KEY UPDATE actual_date = VALUES(actual_date), status = VALUES(status), delay_hours = VALUES(delay_hours), delay_reason = VALUES(delay_reason), custom_field_1 = VALUES(custom_field_1), custom_field_2 = VALUES(custom_field_2)`;
+                    // 1. Restore the Actual Dates and mark as Completed
+                    const sql = `INSERT INTO fms_dibiaa_tasks 
+                                 (job_id, step_id, actual_date, delay_hours, delay_reason, custom_field_1, custom_field_2, status) 
+                                 VALUES ? ON DUPLICATE KEY UPDATE 
+                                 actual_date = VALUES(actual_date), 
+                                 status = VALUES(status), 
+                                 delay_hours = VALUES(delay_hours), 
+                                 delay_reason = VALUES(delay_reason), 
+                                 custom_field_1 = VALUES(custom_field_1), 
+                                 custom_field_2 = VALUES(custom_field_2)`;
                     await db.query(sql, [updateRows]);
 
-                    // --- THE FIX: RUN THE BRAIN ---
+                    // 2. TRIGGER THE RECALCULATION
+                    // This function now uses those Actual Dates to build the correct Plan Dates
                     await performFmsSync(); 
 
                     fs.unlinkSync(req.file.path);
-                    res.json({ message: `Restored ${updateRows.length} entries and recalculated all Plan Dates.` });
+                    res.json({ message: `Success: Restored ${updateRows.length} entries and recalculated Plan Dates for all steps.` });
                 } else {
                     if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
                     res.status(400).json({ message: "No matching data found." });
