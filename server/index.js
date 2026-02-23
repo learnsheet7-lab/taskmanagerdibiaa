@@ -548,12 +548,18 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
         }
 
         if (taskUpdates.length > 0) {
-            const taskSql = `INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) 
-                            VALUES ? 
-                            ON DUPLICATE KEY UPDATE 
-                            plan_date = IF(status = 'Completed', plan_date, VALUES(plan_date))`;
-            await db.query(taskSql, [taskUpdates]);
-        }
+    const taskSql = `
+        INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) 
+        VALUES ? 
+        ON DUPLICATE KEY UPDATE 
+        plan_date = IF(
+            status = 'Completed' OR (actual_date IS NOT NULL AND actual_date != ''), 
+            plan_date, 
+            VALUES(plan_date)
+        )`;
+    
+    await db.query(taskSql, [taskUpdates]);
+}
 
         res.json({ message: `Sync Complete. Deleted ${tasksToDelete.length} obsolete tasks.` });
 
