@@ -448,6 +448,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             const N = parseDate(r[13]); 
 
             const hasInner = (K || '').toLowerCase().includes('inner');
+            const hasReadystock = (K || '').toLowerCase().includes('ready to stock');
             const isOffsetFoil = (I === 'Offset Print' || I === 'Foil Print' || I === 'No');
             const isScreenPrint = (I === 'Screen print');
 
@@ -477,12 +478,29 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
                 if (getAct(2)) plans[5] = addWorkdays(getAct(2), 4);
             }
 
-            if (I === 'Foil Print' && getAct(3)) plans[6] = addWorkdays(getAct(3), 3);
 
-            if (I !== 'Foil Print' && getAct(3)) plans[7] = addWorkdays(getAct(3), 3);
-            else if (getAct(6)) plans[7] = addWorkdays(getAct(6), 3);
+            // step6-foiling
+            if (I === 'Foil Print' && F==='Paper Bag' && getAct(7)) {
+                plans[6] = addWorkdays(getAct(7), 3);
+            } 
+            else if (I === 'Foil Print' && getAct(3)) {plans[6] = addWorkdays(getAct(3), 3);}
 
-            if (getAct(7)) plans[8] = addWorkdays(getAct(7), 1);
+
+            // step7 - die cutting
+            if (I !== 'Foil Print' && getAct(3)) {
+                plans[7] = addWorkdays(getAct(3), 3);
+            }else if (I === 'Foil Print' && F==='Paper Bag' && getAct(3)) {
+                plans[7] = addWorkdays(getAct(3), 3);
+            }          
+            else if (getAct(6)){ plans[7] = addWorkdays(getAct(6), 3);
+
+            }
+
+            // step 8 - full kitting
+            if (I === 'Foil Print' && F==='Paper Bag' && getAct(6)) {
+                plans[8] = addWorkdays(getAct(6), 3);
+            } 
+            else if (getAct(7)) {plans[8] = addWorkdays(getAct(7), 1);}
 
             if (getAct(8)) {
                 const condition = (G === 'Magnetic' || (G || '').startsWith('Sliding Handle') && I === 'Screen print') || (G === 'Magnetic' && isOffsetFoil && hasInner) || (G === 'Magnetic' && hasInner && I === 'Screen print');
@@ -505,8 +523,12 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             const base11 = getAct(10) || getAct(9) || getAct(8);
             if (base11 && hasInner) plans[11] = addWorkdays(base11, 1);
 
+            // Step12 - Screen Printing
+
             let targetDate12 = null;
-            if (isPaperBag && isScreenPrint) targetDate12 = getAct(8);
+
+            if (hasReadystock && I!=='No') targetDate12 = getAct(2);
+            else if (isPaperBag && isScreenPrint) targetDate12 = getAct(8);
             else if ((isMagnetic || isSlidingHandle) && I === 'Screen print') targetDate12 = getAct(9);
             else if ((isMagnetic && hasInner) && I === 'Screen print') targetDate12 = getAct(9);
             else if ((isTopBottom && hasInner) && I === 'Screen print') targetDate12 = getAct(10);
@@ -515,7 +537,8 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
 
             const isboxtypecon = (F === 'Foam' || F === 'Cards' || F === 'Hooks');
             const base13 = getAct(12) || getAct(11) || getAct(10);
-            if (isboxtypecon) plans[13] = addWorkdays(getAct(8), 1);
+            if (hasReadystock && I==='No') plans[13] = addWorkdays(getAct(2), 1);
+            else if (isboxtypecon) plans[13] = addWorkdays(getAct(8), 1);
             else if (base13) plans[13] = addWorkdays(base13, 1);
 
             if (getAct(13)) plans[14] = addWorkdays(getAct(13), 1);
