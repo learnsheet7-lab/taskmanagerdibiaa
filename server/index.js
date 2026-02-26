@@ -1126,16 +1126,24 @@ app.get('/fms/dibiaa-config', async (req, res) => { const [r] = await db.query("
 app.post('/fms/dibiaa-config', async (req, res) => { const { step_id, doer_emails, visible_columns } = req.body; await db.query("UPDATE fms_dibiaa_steps_config SET doer_emails=?, visible_columns=? WHERE step_id=?", [doer_emails, visible_columns, step_id]); res.json({message: "Saved"}); });
 
 // --- DEPLOYMENT CONFIG (VERCEL) ---
-// DELETE THESE LINES from server/index.js
-app.use(express.static(path.join(__dirname, 'build')));
-app.get(/.*/, (req, res) => {
-  res.sendFile(path.join(__dirname, 'build', 'index.html'));
+// --- DEPLOYMENT CONFIG (VERCEL) ---
+const buildPath = path.join(__dirname, 'build');
+app.use(express.static(buildPath));
+
+// API Routes should be ABOVE this catch-all
+app.get('*', (req, res) => {
+    // If the request is for an API, don't send index.html
+    if (req.url.startsWith('/api')) return; 
+    res.sendFile(path.join(buildPath, 'index.html'));
 });
 
 // --- SERVER STARTUP ---
 const PORT = process.env.PORT || 8800;
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-});
+// require.main === module is true only when running locally
+if (require.main === module) {
+    app.listen(PORT, () => {
+        console.log(`Server running locally on port ${PORT}`);
+    });
+}
 
 module.exports = app;
