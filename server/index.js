@@ -1125,25 +1125,25 @@ app.get('/mis/checklist-tasks', async (req, res) => {
 app.get('/fms/dibiaa-config', async (req, res) => { const [r] = await db.query("SELECT * FROM fms_dibiaa_steps_config"); res.json(r); });
 app.post('/fms/dibiaa-config', async (req, res) => { const { step_id, doer_emails, visible_columns } = req.body; await db.query("UPDATE fms_dibiaa_steps_config SET doer_emails=?, visible_columns=? WHERE step_id=?", [doer_emails, visible_columns, step_id]); res.json({message: "Saved"}); });
 
-// --- DEPLOYMENT CONFIG (VERCEL) ---
-const buildPath = path.resolve(__dirname, 'build'); // Use path.resolve for absolute path
+// --- FIXED DEPLOYMENT CONFIG (VERCEL) ---
+const buildPath = path.resolve(__dirname, 'build');
 app.use(express.static(buildPath));
 
-// API Routes (Make sure all your app.get('/api/...') are ABOVE this)
-
-// The Catch-all for React Routing
-app.get('*', (req, res) => {
-    // Safety check: if it's an API call that wasn't caught above, return 404, not index.html
-    if (req.url.startsWith('/api/')) {
+// USE (.*) instead of just * to satisfy the new Express/Path-to-Regexp requirements
+app.get('(.*)', (req, res) => {
+    // If the request is for an API, don't send index.html
+    if (req.url.startsWith('/api')) {
         return res.status(404).json({ message: "API route not found" });
     }
+    
     res.sendFile(path.join(buildPath, 'index.html'), (err) => {
         if (err) {
-            res.status(500).send("Build folder or index.html missing on server");
+            // Log the error so you can see it in Vercel logs if it fails
+            console.error("Error sending index.html:", err);
+            res.status(500).send("Frontend build files not found on server. Ensure 'build' folder exists inside 'server' folder.");
         }
     });
 });
-
 // --- SERVER STARTUP ---
 const PORT = process.env.PORT || 8800;
 if (process.env.NODE_ENV !== 'production') {
