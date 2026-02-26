@@ -1125,28 +1125,18 @@ app.get('/mis/checklist-tasks', async (req, res) => {
 app.get('/fms/dibiaa-config', async (req, res) => { const [r] = await db.query("SELECT * FROM fms_dibiaa_steps_config"); res.json(r); });
 app.post('/fms/dibiaa-config', async (req, res) => { const { step_id, doer_emails, visible_columns } = req.body; await db.query("UPDATE fms_dibiaa_steps_config SET doer_emails=?, visible_columns=? WHERE step_id=?", [doer_emails, visible_columns, step_id]); res.json({message: "Saved"}); });
 
-// --- FINAL STABLE DEPLOYMENT CONFIG (VERCEL) ---
-const buildPath = path.resolve(__dirname, 'build');
-app.use(express.static(buildPath));
-
-// Use named wildcard parameter :path* to satisfy strict routing rules
-app.get('/:path*', (req, res) => {
-    // If the request is for an API, let it fall through or return 404
-    if (req.url.startsWith('/api')) {
-        return res.status(404).json({ message: "API route not found" });
-    }
-    
-    res.sendFile(path.join(buildPath, 'index.html'), (err) => {
-        if (err) {
-            console.error("Critical: index.html not found at", buildPath);
-            res.status(500).send("Frontend build missing. Please check folder structure.");
-        }
-    });
+// --- DEPLOYMENT CONFIG (VERCEL) ---
+app.use(express.static(path.join(__dirname, 'build')));
+app.get(/.*/, (req, res) => {
+  res.sendFile(path.join(__dirname, 'build', 'index.html'));
 });
+
 // --- SERVER STARTUP ---
 const PORT = process.env.PORT || 8800;
-if (process.env.NODE_ENV !== 'production') {
-    app.listen(PORT, () => console.log(`Running on ${PORT}`));
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
 }
 
 module.exports = app;
