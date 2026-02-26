@@ -1126,24 +1126,28 @@ app.get('/fms/dibiaa-config', async (req, res) => { const [r] = await db.query("
 app.post('/fms/dibiaa-config', async (req, res) => { const { step_id, doer_emails, visible_columns } = req.body; await db.query("UPDATE fms_dibiaa_steps_config SET doer_emails=?, visible_columns=? WHERE step_id=?", [doer_emails, visible_columns, step_id]); res.json({message: "Saved"}); });
 
 // --- DEPLOYMENT CONFIG (VERCEL) ---
-// --- DEPLOYMENT CONFIG (VERCEL) ---
-const buildPath = path.join(__dirname, 'build');
+const buildPath = path.resolve(__dirname, 'build'); // Use path.resolve for absolute path
 app.use(express.static(buildPath));
 
-// API Routes should be ABOVE this catch-all
+// API Routes (Make sure all your app.get('/api/...') are ABOVE this)
+
+// The Catch-all for React Routing
 app.get('*', (req, res) => {
-    // If the request is for an API, don't send index.html
-    if (req.url.startsWith('/api')) return; 
-    res.sendFile(path.join(buildPath, 'index.html'));
+    // Safety check: if it's an API call that wasn't caught above, return 404, not index.html
+    if (req.url.startsWith('/api/')) {
+        return res.status(404).json({ message: "API route not found" });
+    }
+    res.sendFile(path.join(buildPath, 'index.html'), (err) => {
+        if (err) {
+            res.status(500).send("Build folder or index.html missing on server");
+        }
+    });
 });
 
 // --- SERVER STARTUP ---
 const PORT = process.env.PORT || 8800;
-// require.main === module is true only when running locally
-if (require.main === module) {
-    app.listen(PORT, () => {
-        console.log(`Server running locally on port ${PORT}`);
-    });
+if (process.env.NODE_ENV !== 'production') {
+    app.listen(PORT, () => console.log(`Running on ${PORT}`));
 }
 
 module.exports = app;
