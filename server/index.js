@@ -1126,9 +1126,17 @@ app.get('/fms/dibiaa-config', async (req, res) => { const [r] = await db.query("
 app.post('/fms/dibiaa-config', async (req, res) => { const { step_id, doer_emails, visible_columns } = req.body; await db.query("UPDATE fms_dibiaa_steps_config SET doer_emails=?, visible_columns=? WHERE step_id=?", [doer_emails, visible_columns, step_id]); res.json({message: "Saved"}); });
 
 // --- DEPLOYMENT CONFIG (VERCEL) ---
+// --- FIXED VERCEL/DEPLOYMENT CONFIG ---
 app.use(express.static(path.join(__dirname, 'build')));
-app.get(/.*/, (req, res) => {
-  res.sendFile(path.join(__dirname, 'build', 'index.html'));
+
+// Handle React routing, return all requests to React app
+app.get('*', (req, res) => {
+    // Check if the request is for a file (has an extension like .js or .css)
+    if (req.path.includes('.')) {
+        res.status(404).send('Not found');
+    } else {
+        res.sendFile(path.resolve(__dirname, 'build', 'index.html'));
+    }
 });
 
 // --- SERVER STARTUP ---
