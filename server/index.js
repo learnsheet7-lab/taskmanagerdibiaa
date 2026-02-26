@@ -116,47 +116,85 @@ app.post('/users/change-password-secure', async (req, res) => { const { id, curr
 
 // --- DASHBOARD ---
 // --- UPDATED DASHBOARD ROUTE ---
+// --- UPDATED DASHBOARD ROUTE ---
 app.get('/dashboard/:email/:role', async (req, res) => { 
-    const { email, role } = req.params;
-    const { filterEmail } = req.query; // Admin selects from dropdown
-    const today = dayjs().format('YYYY-MM-DD');
+    try {
+        const { email, role } = req.params;
+        const { filterEmail } = req.query; 
+        
+        // Define today boundaries
+        const todayStr = dayjs().format('YYYY-MM-DD');
+        const endOfToday = dayjs().endOf('day').format('YYYY-MM-DD HH:mm:ss');
 
-    // If Admin selects a user, target that user's email. Otherwise use standard logic.
-    const targetEmail = (role === 'Admin' && filterEmail) ? filterEmail : email;
-    
-    // Determine if we are viewing "All" (Admin with no filter) or a specific person
-    const isFiltered = (role === 'Admin' && !filterEmail) ? false : true;
+        const targetEmail = (role === 'Admin' && filterEmail) ? filterEmail : email;
+        const isFiltered = (role === 'Admin' && !filterEmail) ? false : true;
 
-    const base = !isFiltered ? "" : `WHERE assigned_to_email='${targetEmail}'`; 
-    const and = !isFiltered ? "WHERE" : "AND";
+        // Base Filters
+        const base = !isFiltered ? "" : `WHERE assigned_to_email='${targetEmail}'`; 
+        const and = !isFiltered ? "WHERE" : "AND";
+        const chkBase = !isFiltered ? "" : `WHERE employee_email='${targetEmail}'`; 
+        const chkAnd = !isFiltered ? "WHERE" : "AND";
 
-    const [delPending] = await db.query(`SELECT COUNT(*) c FROM tasks ${base} ${and} status IN ('Pending','Revision Requested','Waiting Approval')`);
-    const [delRevised] = await db.query(`SELECT COUNT(*) c FROM tasks ${base} ${and} status IN ('Revised', 'Revision Requested')`);
-    const [delCompleted] = await db.query(`SELECT COUNT(*) c FROM tasks ${base} ${and} status='Completed'`);
-    const [delToday] = await db.query(`SELECT * FROM tasks ${base} ${and} target_date <= '${today}' AND status!='Completed' ORDER BY target_date ASC`);
-    
-    const chkBase = !isFiltered ? "" : `WHERE employee_email='${targetEmail}'`; 
-    const chkAnd = !isFiltered ? "WHERE" : "AND";
-    const [chkTotal] = await db.query(`SELECT COUNT(*) c FROM checklist_tasks ${chkBase} ${chkAnd} target_date <= '${today}'`);
-    const [chkPending] = await db.query(`SELECT COUNT(*) c FROM checklist_tasks ${chkBase} ${chkAnd} target_date <= '${today}' AND status='Pending'`);
-    const [chkCompleted] = await db.query(`SELECT COUNT(*) c FROM checklist_tasks ${chkBase} ${chkAnd} target_date <= '${today}' AND status='Completed'`);
-    
-    // FMS Logic
-    // Updated FMS Logic in /dashboard route
-let fmsBase = "SELECT t.*, r.job_number, r.company_name, t.custom_field_1, t.custom_field_2 FROM fms_dibiaa_tasks t JOIN fms_dibiaa_raw r ON t.job_id=r.job_id WHERE 1=1";
-    if(isFiltered) { 
-        // Filter FMS by steps assigned to this user's email
-        const [mySteps] = await db.query("SELECT step_id FROM fms_dibiaa_steps_config WHERE doer_emails LIKE ?", [`%${targetEmail}%`]); 
-        const ids = mySteps.map(s=>s.step_id).join(',') || '0'; 
-        fmsBase += ` AND t.step_id IN (${ids})`; 
+        // 1. DELEGATION TASKS
+        const [delPending] = await db.query(`SELECT COUNT(*) c FROM tasks ${base} ${and} status IN ('Pending','Revision Requested','Waiting Approval')`);
+        const [delRevised] = await db.query(`SELECT COUNT(*) c FROM tasks ${base} ${and} status IN ('Revised', 'Revision Requested')`);
+        const [delCompleted] = await db.query(`SELECT COUNT(*) c FROM tasks ${base} ${and} status='Completed'`);
+        // List for Today's Pending Delegation
+        const [delTodayList] = await db.query(`SELECT * FROM tasks ${base} ${and} target_date <= '${todayStr}' AND status!='Completed' ORDER BY target_date ASC`);
+        
+        // 2. CHECKLIST TASKS
+        const [chkTotal] = await db.query(`SELECT COUNT(*) c FROM checklist_tasks ${chkBase} ${chkAnd} target_date <= '${todayStr}'`);
+        const [chkCompleted] = await db.query(`SELECT COUNT(*) c FROM checklist_tasks ${chkBase} ${chkAnd} target_date <= '${todayStr}' AND status='Completed'`);
+        // List for Today's Pending Checklists
+        const [chkTodayList] = await db.query(`SELECT * FROM checklist_tasks ${chkBase} ${chkAnd} target_date <= '${todayStr}' AND status='Pending' ORDER BY target_date ASC`);
+        
+        // 3. FMS TASKS
+        // First, get the step IDs assigned to this user if filtered
+        let fmsStepFilter = "";
+        if(isFiltered) {
+            const [mySteps] = await db.query("SELECT step_id FROM fms_dibiaa_steps_config WHERE doer_emails LIKE ?", [`%${targetEmail}%`]); 
+            const ids = mySteps.map(s => s.step_id).join(',') || '0'; 
+            fmsStepFilter = `AND t.step_id IN (${ids})`;
+        }
+
+        // Fetch Total Count (Overall status)
+        const [fmsAll] = await db.query(`SELECT t.id, t.status FROM fms_dibiaa_tasks t WHERE 1=1 ${fmsStepFilter}`);
+
+        // Fetch List for Today's Pending FMS (Plan date <= End of Today)
+        const [fmsTodayList] = await db.query(`
+            SELECT t.*, r.job_number, r.company_name, s.step_name 
+            FROM fms_dibiaa_tasks t 
+            JOIN fms_dibiaa_raw r ON t.job_id = r.job_id 
+            JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
+            WHERE t.status='Pending' AND t.plan_date <= '${endOfToday}' 
+            ${fmsStepFilter}
+            ORDER BY t.plan_date ASC
+        `);
+
+        res.json({
+            delegation: { 
+                pending: delPending[0].c, 
+                revised: delRevised[0].c, 
+                completed: delCompleted[0].c, 
+                today: delTodayList 
+            },
+            checklist: { 
+                pending: chkTodayList.length, 
+                total: chkTotal[0].c, 
+                completed: chkCompleted[0].c,
+                today: chkTodayList // Returning actual list
+            },
+            fms: { 
+                pending: fmsTodayList.length, // Only counts those due today or overdue
+                total: fmsAll.length, 
+                completed: fmsAll.filter(t => t.status === 'Completed').length,
+                today: fmsTodayList // Returning actual list
+            }
+        }); 
+    } catch (err) {
+        console.error("Dashboard Error:", err);
+        res.status(500).json({ error: err.message });
     }
-    const [fmsAll] = await db.query(fmsBase);
-
-    res.json({
-        delegation: { pending: delPending[0].c, revised: delRevised[0].c, completed: delCompleted[0].c, today: delToday },
-        checklist: { pending: chkPending[0].c, total: chkTotal[0].c, completed: chkCompleted[0].c },
-        fms: { pending: fmsAll.filter(t=>t.status==='Pending').length, total: fmsAll.length, completed: fmsAll.filter(t=>t.status==='Completed').length }
-    }); 
 });
 
 // --- CHECKLIST MODULE (FIXED EMAIL STORAGE) ---
