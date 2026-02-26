@@ -1125,22 +1125,21 @@ app.get('/mis/checklist-tasks', async (req, res) => {
 app.get('/fms/dibiaa-config', async (req, res) => { const [r] = await db.query("SELECT * FROM fms_dibiaa_steps_config"); res.json(r); });
 app.post('/fms/dibiaa-config', async (req, res) => { const { step_id, doer_emails, visible_columns } = req.body; await db.query("UPDATE fms_dibiaa_steps_config SET doer_emails=?, visible_columns=? WHERE step_id=?", [doer_emails, visible_columns, step_id]); res.json({message: "Saved"}); });
 
-// --- FIXED DEPLOYMENT CONFIG (VERCEL) ---
+// --- FINAL STABLE DEPLOYMENT CONFIG (VERCEL) ---
 const buildPath = path.resolve(__dirname, 'build');
 app.use(express.static(buildPath));
 
-// USE (.*) instead of just * to satisfy the new Express/Path-to-Regexp requirements
-app.get('(.*)', (req, res) => {
-    // If the request is for an API, don't send index.html
+// Use named wildcard parameter :path* to satisfy strict routing rules
+app.get('/:path*', (req, res) => {
+    // If the request is for an API, let it fall through or return 404
     if (req.url.startsWith('/api')) {
         return res.status(404).json({ message: "API route not found" });
     }
     
     res.sendFile(path.join(buildPath, 'index.html'), (err) => {
         if (err) {
-            // Log the error so you can see it in Vercel logs if it fails
-            console.error("Error sending index.html:", err);
-            res.status(500).send("Frontend build files not found on server. Ensure 'build' folder exists inside 'server' folder.");
+            console.error("Critical: index.html not found at", buildPath);
+            res.status(500).send("Frontend build missing. Please check folder structure.");
         }
     });
 });
