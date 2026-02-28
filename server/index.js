@@ -1104,13 +1104,18 @@ app.put('/checklist/transfer', async (req, res) => {
 
 // 2. Fetch Checklist Comments
 app.get('/checklist/comments/:id', async (req, res) => {
-    const [r] = await db.query(
-        "SELECT id, user_name, comment, DATE_FORMAT(created_at,'%d/%m/%Y %H:%i:%s') as formatted_date FROM checklist_comments WHERE checklist_id=? ORDER BY created_at DESC",
-        [req.params.id]
-    );
+    const sql = `
+        SELECT 
+            user_name, 
+            comment, 
+            DATE_FORMAT(created_at, '%d/%m/%Y %H:%i:%s') as formatted_date 
+        FROM checklist_comments 
+        WHERE checklist_id = ? 
+        ORDER BY created_at DESC`;
+    
+    const [r] = await db.query(sql, [req.params.id]);
     res.json(r);
 });
-
 // 3. Post Checklist Comment
 app.post('/checklist/comments', async (req, res) => {
     await db.query(
