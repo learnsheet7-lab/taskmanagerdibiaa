@@ -1086,6 +1086,40 @@ app.put('/fms/update-actual', async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// 1. Transfer Checklist Task
+app.put('/checklist/transfer', async (req, res) => {
+    const { id, new_email, new_date } = req.body;
+    try {
+        // Fetch the new user's name first
+        const [u] = await db.query("SELECT name FROM users WHERE email = ?", [new_email]);
+        const new_name = u.length > 0 ? u[0].name : new_email;
+
+        await db.query(
+            "UPDATE checklist_tasks SET employee_email = ?, employee_name = ?, target_date = ? WHERE id = ?", 
+            [new_email, new_name, new_date, id]
+        );
+        res.json({ message: "Task Transferred Successfully" });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 2. Fetch Checklist Comments
+app.get('/checklist/comments/:id', async (req, res) => {
+    const [r] = await db.query(
+        "SELECT id, user_name, comment, DATE_FORMAT(created_at,'%d/%m/%Y %H:%i:%s') as formatted_date FROM checklist_comments WHERE checklist_id=? ORDER BY created_at DESC",
+        [req.params.id]
+    );
+    res.json(r);
+});
+
+// 3. Post Checklist Comment
+app.post('/checklist/comments', async (req, res) => {
+    await db.query(
+        "INSERT INTO checklist_comments (checklist_id, user_name, comment) VALUES (?,?,?)",
+        [req.body.checklist_id, req.body.user_name, req.body.comment]
+    );
+    res.json({ message: "Comment Added" });
+});
+
 // 3. Reset Job Logic
 app.post('/fms/reset-job', async (req, res) => {
     const { job_number, reset_to_step_id } = req.body;
