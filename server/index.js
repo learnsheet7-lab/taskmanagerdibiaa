@@ -1120,6 +1120,23 @@ app.post('/checklist/comments', async (req, res) => {
     res.json({ message: "Comment Added" });
 });
 
+// Bulk Transfer Checklist Tasks for a specific date
+app.put('/checklist/bulk-transfer', async (req, res) => {
+    const { current_email, current_date, new_email, new_date } = req.body;
+    try {
+        const [u] = await db.query("SELECT name FROM users WHERE email = ?", [new_email]);
+        const new_name = u.length > 0 ? u[0].name : new_email;
+
+        const sql = `
+            UPDATE checklist_tasks 
+            SET employee_email = ?, employee_name = ?, target_date = ? 
+            WHERE employee_email = ? AND target_date = ? AND status = 'Pending'`;
+            
+        const [result] = await db.query(sql, [new_email, new_name, new_date, current_email, current_date]);
+        res.json({ message: `Successfully transferred ${result.affectedRows} tasks.` });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // 3. Reset Job Logic
 app.post('/fms/reset-job', async (req, res) => {
     const { job_number, reset_to_step_id } = req.body;
