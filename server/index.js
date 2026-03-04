@@ -1142,6 +1142,20 @@ app.put('/checklist/bulk-transfer', async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Bulk Delete Checklist Tasks for a specific doer on a specific date
+app.delete('/checklist/bulk-delete', async (req, res) => {
+    const { employee_email, target_date } = req.query; // Use query params for DELETE
+    try {
+        const sql = "DELETE FROM checklist_tasks WHERE employee_email = ? AND target_date = ? AND status = 'Pending'";
+        const [result] = await db.query(sql, [employee_email, target_date]);
+        
+        res.json({ message: `Successfully deleted ${result.affectedRows} pending tasks.` });
+    } catch (e) { 
+        console.error("Bulk Delete Error:", e);
+        res.status(500).json({ error: e.message }); 
+    }
+});
+
 // 3. Reset Job Logic
 app.post('/fms/reset-job', async (req, res) => {
     const { job_number, reset_to_step_id } = req.body;
