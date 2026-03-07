@@ -508,8 +508,9 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             }
             //step2
                 
+            if (!(F === 'Paper Box' )) {
             if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1);  //step3
-            
+            }
 
             // const step1Act = getAct(1);
             // if ((B === 'OTD' || B === 'Jewellery (OTD)') && step1Act) {
@@ -522,7 +523,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
 
             
 
-            if (!(F === 'Paper Bag' || F === 'Foam' || (F || '').endsWith('Tray'))) {
+            if (!(F === 'Paper Bag' || F === 'Paper Box' || F === 'Foam' || (F || '').endsWith('Tray'))) {
                 if (getAct(2)) plans[5] = addWorkdays(getAct(2), 4);
             }
 
