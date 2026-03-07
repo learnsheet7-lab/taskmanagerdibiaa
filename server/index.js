@@ -488,8 +488,8 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             const K = r[10];          
             const N = parseDate(r[13]); 
 
-            const hasInner = K.toLowerCase().includes('inner');
-            const hasReadystock = K.toLowerCase().includes('ready to stock');
+            const hasInner = K && K.toLowerCase().includes('inner');
+            const hasReadystock = K && K.toLowerCase().includes('ready to stock');
             const isOffsetFoil = (I === 'Offset Print' || I === 'Foil Print' || I === 'No');
             const isScreenPrint = (I === 'Screen print');
 
@@ -559,15 +559,19 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             //     if (condition) plans[9] = addWorkdays(getAct(8), 1);
             // }
 
-            if (G === 'Magnetic' || (G || '').startsWith('Sliding Handle') && I === 'Screen print') {
+            // Case 1: (Magnetic OR Sliding) AND Screen Print
+            const case1 = (G === 'Magnetic' || (G || '').startsWith('Sliding Handle')) && I === 'Screen print';
+
+            // Case 2: Magnetic AND Inner AND Offset Foil
+            const case2 = G === 'Magnetic' && hasInner && isOffsetFoil;
+
+            // Case 3: Magnetic AND Inner AND Screen Print
+            const case3 = G === 'Magnetic' && hasInner && I === 'Screen print';
+
+            // Apply the update if any of the cases are true
+            if (getAct(8) && (case1 || case2 || case3)) {
                 plans[9] = addWorkdays(getAct(8), 1);
             }
-            else if (G === 'Magnetic' && isOffsetFoil && hasInner) {
-                plans[9] = addWorkdays(getAct(8), 1);
-            }else if (G === 'Magnetic' && hasInner && I === 'Screen print') {
-                plans[9] = addWorkdays(getAct(8), 1);
-            }          
-            
 
             const isTopBottom = G === 'Top-Bottom'; const isSlidingBox = G === 'Sliding Box'; const isMagnetic = G === 'Magnetic';
             const isSlidingHandle = G === 'Sliding Handle Box'; const isPaperBag = F === 'Paper Bag';
