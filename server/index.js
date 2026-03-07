@@ -488,8 +488,8 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             const K = r[10];          
             const N = parseDate(r[13]); 
 
-            const hasInner = K?.toLowerCase().includes('inner');
-            const hasReadystock = K?.toLowerCase().includes('ready to stock');
+            const hasInner = K.toLowerCase().includes('inner');
+            const hasReadystock = K.toLowerCase().includes('ready to stock');
             const isOffsetFoil = (I === 'Offset Print' || I === 'Foil Print' || I === 'No');
             const isScreenPrint = (I === 'Screen print');
 
