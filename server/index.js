@@ -554,10 +554,20 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             } 
             else if (getAct(7)) {plans[8] = addWorkdays(getAct(7), 1);}
 
-            if (getAct(8)) {
-                const condition = (G === 'Magnetic' || (G || '').startsWith('Sliding Handle') && I === 'Screen print') || (G === 'Magnetic' && isOffsetFoil && hasInner) || (G === 'Magnetic' && hasInner && I === 'Screen print');
-                if (condition) plans[9] = addWorkdays(getAct(8), 1);
+            // if (getAct(8)) {
+            //     const condition = (G === 'Magnetic' || (G || '').startsWith('Sliding Handle') && I === 'Screen print') || (G === 'Magnetic' && isOffsetFoil && hasInner) || (G === 'Magnetic' && hasInner && I === 'Screen print');
+            //     if (condition) plans[9] = addWorkdays(getAct(8), 1);
+            // }
+
+            if (G === 'Magnetic' || (G || '').startsWith('Sliding Handle') && I === 'Screen print') {
+                plans[9] = addWorkdays(getAct(8), 1);
             }
+            else if (G === 'Magnetic' && isOffsetFoil && hasInner) {
+                plans[9] = addWorkdays(getAct(8), 1);
+            }else if (G === 'Magnetic' && hasInner && I === 'Screen print') {
+                plans[9] = addWorkdays(getAct(8), 1);
+            }          
+            
 
             const isTopBottom = G === 'Top-Bottom'; const isSlidingBox = G === 'Sliding Box'; const isMagnetic = G === 'Magnetic';
             const isSlidingHandle = G === 'Sliding Handle Box'; const isPaperBag = F === 'Paper Bag';
