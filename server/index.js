@@ -617,13 +617,29 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             else if ((isTopBottom || isSlidingBox) && I === 'Screen print') targetDate12 = getAct(10);
             if (targetDate12) plans[12] = addWorkdays(targetDate12, 1);
 
+
+
+
             const isboxtypecon = (F === 'Cards' || F === 'Hooks');
-            const base13 = getAct(12) || getAct(11) || getAct(10);
+            // const base13 = getAct(12) || getAct(11) || getAct(10);
             if (hasReadystock && I==='No') plans[13] = addWorkdays(getAct(2), 1);
             else if (isboxtypecon) plans[13] = addWorkdays(getAct(2), 1);
             else if (F === 'Foam' && getAct(5)) plans[13] = addWorkdays(getAct(5), 1);
             else if (F === 'Paper Box' && getAct(8)) plans[13] = addWorkdays(getAct(8), 1);
-            else if (base13) plans[13] = addWorkdays(base13, 1);
+            else if (isPaperBag && isScreenPrint) plans[13] = addWorkdays(getAct(10), 1);    
+            else if (isPaperBag && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);    
+            else if (isMagnetic && hasInner && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);    
+            else if ((isMagnetic || isSlidingHandle) && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);    
+            else if ((isMagnetic || isSlidingHandle) && isScreenPrint) plans[13] = addWorkdays(getAct(10), 1);    
+            else if (isTopBottom && hasInner && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);    
+            else if (isTopBottom && hasInner && isScreenPrint) plans[13] = addWorkdays(getAct(12), 1);    
+            else if ((isTopBottom || isSlidingHandle) && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);    
+            else if ((isTopBottom || isSlidingHandle)  && isScreenPrint) plans[13] = addWorkdays(getAct(12), 1);    
+            
+
+
+
+
 
             if (getAct(13)) plans[14] = addWorkdays(getAct(13), 1);
             if (getAct(14)) plans[15] = addWorkdays(getAct(14), 1);
