@@ -488,7 +488,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             const K = r[10];          
             const N = parseDate(r[13]); 
 
-            const hasInner = K && K.toLowerCase().includes('inner');
+            const hasInner = K && K.toLowerCase().includes('inner print');
             const hasReadystock = K && K.toLowerCase().includes('ready to stock');
             const isOffsetFoil = (I === 'Offset Print' || I === 'Foil Print' || I === 'No');
             const isScreenPrint = (I === 'Screen print');
@@ -573,8 +573,11 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
                 plans[9] = addWorkdays(getAct(8), 1);
             }
 
-            const isTopBottom = G === 'Top-Bottom'; const isSlidingBox = G === 'Sliding Box'; const isMagnetic = G === 'Magnetic';
-            const isSlidingHandle = G === 'Sliding Handle Box'; const isPaperBag = F === 'Paper Bag';
+            const isTopBottom = G === 'Top-Bottom'; 
+            const isSlidingBox = G === 'Sliding Box'; 
+            const isMagnetic = G === 'Magnetic';
+            const isSlidingHandle = G === 'Sliding Handle Box'; 
+            const isPaperBag = F === 'Paper Bag';
 
             let targetDate10 = null;
             if (isPaperBag && isScreenPrint) targetDate10 = getAct(12);
@@ -586,8 +589,21 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             else if (isTopBottom || isSlidingBox) targetDate10 = getAct(8);
             if (targetDate10) plans[10] = addWorkdays(targetDate10, 2);
 
-            const base11 = getAct(10) || getAct(9) || getAct(8);
-            if (base11 && hasInner) plans[11] = addWorkdays(base11, 1);
+            // const base11 = getAct(10) || getAct(9) || getAct(8);
+            // if (base11 && hasInner) plans[11] = addWorkdays(base11, 1);
+
+            const innercase1 = isTopBottom && hasInner;
+            const innercase2 = isMagnetic && hasInner && I === 'Screen print';
+            const innercase3 = isMagnetic && hasInner && isOffsetFoil;
+
+            if (innercase1) {
+                plans[11] = addWorkdays(getAct(8), 1);
+            }else if(innercase2){
+                plans[11] = addWorkdays(getAct(12), 1);
+            }else if(innercase3){
+                plans[11] = addWorkdays(getAct(9), 1);
+            }
+
 
             // Step12 - Screen Printing
 
