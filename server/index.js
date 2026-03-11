@@ -893,156 +893,178 @@ const performFmsSync = async () => {
         let plans = {};
 
         // --- START LOGIC ---
-        if (A) plans[4] = addWorkdays(A, 3);  //step4
+            if (A) plans[4] = addWorkdays(A, 3);  //step4
 
-        const step4Act = getAct(4);
-        if ((B === 'OTD' || B === 'Jewellery (OTD)' && step4Act)) plans[1] = addWorkdays(step4Act, 6); // step1
+            const step4Act = getAct(4);
+            if ((B === 'OTD' || B === 'Jewellery (OTD)' && step4Act)) plans[1] = addWorkdays(step4Act, 6); // step1
 
-        if (B === 'OTD' || B === 'Jewellery (OTD)') {
-            plans[2] = addWorkdays(getAct(1), 1);
-        } else if (getAct(4)) {
-            plans[2] = addWorkdays(getAct(4), 1);
+            if (B === 'OTD' || B === 'Jewellery (OTD)') {
+                plans[2] = addWorkdays(getAct(1), 1);
+            } else if (getAct(4)) {
+                plans[2] = addWorkdays(getAct(4), 1);
+            }
+            //step2
+            if(!hasReadystock){
+            if (!(F === 'Paper Box' || F === 'Foam' )) {
+                if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1);  //step3
+            }
         }
-        //step2
+        
 
-        if (!(F === 'Paper Box')) {
-            if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1);  //step3
-        }
-
-        // const step1Act = getAct(1);
-        // if ((B === 'OTD' || B === 'Jewellery (OTD)') && step1Act) {
-        //     plans[2] = addWorkdays(step1Act, 1);
-        // } else if ((B !== 'OTD' || B !== 'Jewellery (OTD)') && I === 'No' && A) {
-        //     plans[2] = addWorkdays(A, 1);
-        // } else if ((B !== 'OTD' || B !== 'Jewellery (OTD)') && I !== 'No' && step4Act){
-        //     plans[2] = addWorkdays(step4Act, 1);
-        // }
+            // const step1Act = getAct(1);
+            // if ((B === 'OTD' || B === 'Jewellery (OTD)') && step1Act) {
+            //     plans[2] = addWorkdays(step1Act, 1);
+            // } else if ((B !== 'OTD' || B !== 'Jewellery (OTD)') && I === 'No' && A) {
+            //     plans[2] = addWorkdays(A, 1);
+            // } else if ((B !== 'OTD' || B !== 'Jewellery (OTD)') && I !== 'No' && step4Act){
+            //     plans[2] = addWorkdays(step4Act, 1);
+            // }
 
 
-
-        if (!(F === 'Paper Bag' || F === 'Paper Box' || (F || '').endsWith('Tray'))) {
-            if (getAct(2)) plans[5] = addWorkdays(getAct(2), 4);
-        }
-
-
-        // step6-foiling
-        if (I === 'Foil Print' && F === 'Paper Bag' && getAct(7)) {
-            plans[6] = addWorkdays(getAct(7), 3);
-        }
-        else if (I === 'Foil Print' && getAct(3)) { plans[6] = addWorkdays(getAct(3), 3); }
-
-
-        // step7 - die cutting
-        if (F === 'Paper Box' && getAct(2)) {
-            plans[7] = addWorkdays(getAct(2), 3);
-        }
-        else if (I !== 'Foil Print' && getAct(3)) {
-            plans[7] = addWorkdays(getAct(3), 3);
-        } else if (I === 'Foil Print' && F === 'Paper Bag' && getAct(3)) {
-            plans[7] = addWorkdays(getAct(3), 3);
-        }
-        else if (getAct(6)) {
-            plans[7] = addWorkdays(getAct(6), 3);
-
-        }
-
-        // step 8 - full kitting
-        if (I === 'Foil Print' && F === 'Paper Bag' && getAct(6)) {
-            plans[8] = addWorkdays(getAct(6), 3);
-        }
-        else if (getAct(7)) { plans[8] = addWorkdays(getAct(7), 1); }
-
-        // if (getAct(8)) {
-        //     const condition = (G === 'Magnetic' || (G || '').startsWith('Sliding Handle') && I === 'Screen print') || (G === 'Magnetic' && isOffsetFoil && hasInner) || (G === 'Magnetic' && hasInner && I === 'Screen print');
-        //     if (condition) plans[9] = addWorkdays(getAct(8), 1);
-        // }
-
-        // Case 1: (Magnetic OR Sliding) AND Screen Print
-        const case1 = (G === 'Magnetic' || (G || '').startsWith('Sliding Handle')) && I === 'Screen print';
-
-        // Case 2: Magnetic AND Inner AND Offset Foil
-        const case2 = G === 'Magnetic' && hasInner && isOffsetFoil;
-
-        // Case 3: Magnetic AND Inner AND Screen Print
-        const case3 = G === 'Magnetic' && hasInner && I === 'Screen print';
-
-        // Apply the update if any of the cases are true
-        if (getAct(8) && (case1 || case2 || case3)) {
-            plans[9] = addWorkdays(getAct(8), 1);
-        }
-
-        const isTopBottom = G === 'Top-Bottom';
-        const isSlidingBox = G === 'Sliding Box';
-        const isMagnetic = G === 'Magnetic';
-        const isSlidingHandle = G === 'Sliding Handle Box';
-        const isPaperBag = F === 'Paper Bag';
-
-        let targetDate10 = null;
-        if (isPaperBag && isScreenPrint) targetDate10 = getAct(12);
-        else if (isPaperBag && isOffsetFoil) targetDate10 = getAct(8);
-        else if (isMagnetic && hasInner) targetDate10 = getAct(11);
-        else if ((isMagnetic || isSlidingHandle) && isOffsetFoil) targetDate10 = getAct(8);
-        else if ((isMagnetic || isSlidingHandle) && isScreenPrint) targetDate10 = getAct(12);
-        else if (isTopBottom && hasInner) targetDate10 = getAct(11);
-        else if (isTopBottom || isSlidingBox) targetDate10 = getAct(8);
-        if (targetDate10) plans[10] = addWorkdays(targetDate10, 2);
-
-        // const base11 = getAct(10) || getAct(9) || getAct(8);
-        // if (base11 && hasInner) plans[11] = addWorkdays(base11, 1);
-
-        const innercase1 = isTopBottom && hasInner;
-        const innercase2 = isMagnetic && hasInner && I === 'Screen print';
-        const innercase3 = isMagnetic && hasInner && isOffsetFoil;
-
-        if (innercase1) {
-            plans[11] = addWorkdays(getAct(8), 1);
-        } else if (innercase2) {
-            plans[11] = addWorkdays(getAct(12), 1);
-        } else if (innercase3) {
-            plans[11] = addWorkdays(getAct(9), 1);
+            if(!hasReadystock){
+            if (!(F === 'Paper Bag' || F === 'Paper Box' || F === 'PVC Pad' || (F || '').endsWith('Tray'))) {
+                if (getAct(2)) plans[5] = addWorkdays(getAct(2), 4);
+            }
         }
 
 
-        // Step12 - Screen Printing
+            // step6-foiling
+            if(!hasReadystock){
+            if (F === 'Paper Bag' && I === 'Foil Print' && getAct(7)) {
+                plans[6] = addWorkdays(getAct(7), 3);
+            }
+            else if (F !== 'Paper Bag' && I === 'Foil Print' && getAct(3)) { plans[6] = addWorkdays(getAct(3), 3); }
+        }
 
-        let targetDate12 = null;
+            // step7 - die cutting
+            if(!hasReadystock){
+            if (F === 'PVC Pad' && getAct(11)) {
+                plans[7] = addWorkdays(getAct(11), 3);
+            } 
+            else if (F === 'Paper Box' && getAct(2)) {
+                plans[7] = addWorkdays(getAct(2), 3);
+            }else if (I === 'Foil Print' && F === 'Paper Bag' && getAct(3)) {
+                plans[7] = addWorkdays(getAct(3), 3);
+            }
+            else if (F !== 'PVC Pad' && I !== 'Foil Print' && getAct(3)) {
+                plans[7] = addWorkdays(getAct(3), 3);
+            } 
+            else if (F !== 'PVC Pad' && getAct(6)) {
+                plans[7] = addWorkdays(getAct(6), 3);
 
-        if (hasReadystock && I === 'Screen print') targetDate12 = getAct(2);
-        else if (isPaperBag && isScreenPrint) targetDate12 = getAct(8);
-        else if ((isMagnetic || isSlidingHandle) && I === 'Screen print') targetDate12 = getAct(9);
-        else if ((isMagnetic && hasInner) && I === 'Screen print') targetDate12 = getAct(9);
-        else if ((isTopBottom && hasInner) && I === 'Screen print') targetDate12 = getAct(10);
-        else if ((isTopBottom || isSlidingBox) && I === 'Screen print') targetDate12 = getAct(10);
-        if (targetDate12) plans[12] = addWorkdays(targetDate12, 1);
+            }
+        }
+
+            // step 8 - full kitting
+            if(!hasReadystock){
+            if (F !== 'PVC Pad') {
+                if (F === 'Paper Bag' && I === 'Foil Print' && getAct(6)) {
+                    plans[8] = addWorkdays(getAct(6), 3);
+                }
+                else if (F !== 'Paper Bag' && I !== 'Foil Print' && getAct(7)) {
+                    plans[8] = addWorkdays(getAct(7), 1);
+                }
+            }
+        }
+
+            // if (getAct(8)) {
+            //     const condition = (G === 'Magnetic' || (G || '').startsWith('Sliding Handle') && I === 'Screen print') || (G === 'Magnetic' && isOffsetFoil && hasInner) || (G === 'Magnetic' && hasInner && I === 'Screen print');
+            //     if (condition) plans[9] = addWorkdays(getAct(8), 1);
+            // }
+
+            // Case 1: (Magnetic OR Sliding) AND Screen Print
+            const case1 = (G === 'Magnetic' || (G || '').startsWith('Sliding Handle')) && I === 'Screen print';
+
+            // Case 2: Magnetic AND Inner AND Offset Foil
+            const case2 = G === 'Magnetic' && hasInner && isOffsetFoil;
+
+            // Case 3: Magnetic AND Inner AND Screen Print
+            const case3 = G === 'Magnetic' && hasInner && I === 'Screen print';
+
+            // Apply the update if any of the cases are true
+            if (getAct(8) && (case1 || case2 || case3)) {
+                plans[9] = addWorkdays(getAct(8), 1);
+            }
+
+            const isTopBottom = G === 'Top-Bottom';
+            const isSlidingBox = G === 'Sliding Box';
+            const isMagnetic = G === 'Magnetic';
+            const isSlidingHandle = G === 'Sliding Handle Box';
+            const isPaperBag = F === 'Paper Bag';
+
+            let targetDate10 = null;
+            if (isPaperBag && isScreenPrint) targetDate10 = getAct(12);
+            else if (isPaperBag && isOffsetFoil) targetDate10 = getAct(8);
+            else if (isMagnetic && hasInner) targetDate10 = getAct(11);
+            else if ((isMagnetic || isSlidingHandle) && isOffsetFoil) targetDate10 = getAct(8);
+            else if ((isMagnetic || isSlidingHandle) && isScreenPrint) targetDate10 = getAct(12);
+            else if (isTopBottom && hasInner) targetDate10 = getAct(11);
+            else if (isTopBottom || isSlidingBox) targetDate10 = getAct(8);
+            if (targetDate10) plans[10] = addWorkdays(targetDate10, 2);
+
+            // const base11 = getAct(10) || getAct(9) || getAct(8);
+            // if (base11 && hasInner) plans[11] = addWorkdays(base11, 1);
+
+            const innercase1 = isTopBottom && hasInner;
+            const innercase2 = isMagnetic && hasInner && I === 'Screen print';
+            const innercase3 = isMagnetic && hasInner && isOffsetFoil;
+            const innercase4 = F==='PVC Pad';
+
+
+            if (innercase4) {
+                plans[11] = addWorkdays(getAct(3), 1);
+            } 
+            else if (innercase1) {
+                plans[11] = addWorkdays(getAct(8), 1);
+            } else if (innercase2) {
+                plans[11] = addWorkdays(getAct(12), 1);
+            } else if (innercase3) {
+                plans[11] = addWorkdays(getAct(9), 1);
+            }
+
+
+            // Step12 - Screen Printing
+
+            let targetDate12 = null;
+
+            if (hasReadystock && I === 'Screen print') targetDate12 = getAct(2);
+            else if (F === 'PVC Pad') targetDate12 = getAct(7);
+            else if (isPaperBag && isScreenPrint) targetDate12 = getAct(8);
+            else if ((isMagnetic || isSlidingHandle) && I === 'Screen print') targetDate12 = getAct(9);
+            else if ((isMagnetic && hasInner) && I === 'Screen print') targetDate12 = getAct(9);
+            else if ((isTopBottom && hasInner) && I === 'Screen print') targetDate12 = getAct(10);
+            else if ((isTopBottom || isSlidingBox) && I === 'Screen print') targetDate12 = getAct(10);
+            if (targetDate12) plans[12] = addWorkdays(targetDate12, 1);
 
 
 
 
-        const isboxtypecon = (F === 'Cards' || F === 'Hooks');
-        // const base13 = getAct(12) || getAct(11) || getAct(10);
-        if (hasReadystock && I === 'No') plans[13] = addWorkdays(getAct(2), 1);
-        else if (isboxtypecon) plans[13] = addWorkdays(getAct(2), 1);
-        else if (F === 'Foam' && getAct(5)) plans[13] = addWorkdays(getAct(5), 1);
-        else if (F === 'Paper Box' && getAct(8)) plans[13] = addWorkdays(getAct(8), 1);
-        else if (isPaperBag && isScreenPrint) plans[13] = addWorkdays(getAct(10), 1);
-        else if (isPaperBag && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
-        else if (isMagnetic && hasInner && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
-        else if ((isMagnetic || isSlidingHandle) && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
-        else if ((isMagnetic || isSlidingHandle) && isScreenPrint) plans[13] = addWorkdays(getAct(10), 1);
-        else if (isTopBottom && hasInner && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
-        else if (isTopBottom && hasInner && isScreenPrint) plans[13] = addWorkdays(getAct(12), 1);
-        else if ((isTopBottom || isSlidingBox) && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
-        else if ((isTopBottom || isSlidingBox) && isScreenPrint) plans[13] = addWorkdays(getAct(12), 1);
+            const isboxtypecon = (F === 'Cards' || F === 'Hooks');
+            // const base13 = getAct(12) || getAct(11) || getAct(10);
+            if (hasReadystock && I === 'No') plans[13] = addWorkdays(getAct(2), 1);
+            else if (isboxtypecon) plans[13] = addWorkdays(getAct(2), 1);
+            else if (F === 'Foam' && getAct(5)) plans[13] = addWorkdays(getAct(5), 1);
+            else if (F === 'Paper Box' && getAct(8)) plans[13] = addWorkdays(getAct(8), 1);
+            else if (isPaperBag && isScreenPrint) plans[13] = addWorkdays(getAct(10), 1);
+            else if (isPaperBag && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
+            else if (isMagnetic && hasInner && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
+            else if ((isMagnetic || isSlidingHandle) && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
+            else if ((isMagnetic || isSlidingHandle) && isScreenPrint) plans[13] = addWorkdays(getAct(10), 1);
+            else if (isTopBottom && hasInner && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
+            else if (F === 'PVC Pad' && getAct(12)) plans[13] = addWorkdays(getAct(12), 1);
+            else if (isTopBottom && hasInner && isScreenPrint) plans[13] = addWorkdays(getAct(12), 1);
+            else if ((isTopBottom || isSlidingBox) && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
+            else if ((isTopBottom || isSlidingBox) && isScreenPrint) plans[13] = addWorkdays(getAct(12), 1);
 
 
 
 
 
 
-        if (getAct(13)) plans[14] = addWorkdays(getAct(13), 1);
-        if (getAct(14)) plans[15] = addWorkdays(getAct(14), 1);
+            if (getAct(13)) plans[14] = addWorkdays(getAct(13), 1);
+            if (getAct(14)) plans[15] = addWorkdays(getAct(14), 1);
 
-        if (N) plans[16] = N;
+            if (N) plans[16] = N;
 
         // 3. GENERATE UPDATE DATA
         for (let s = 1; s <= 16; s++) {
