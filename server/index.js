@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
-const dayjs = require('dayjs'); 
+const dayjs = require('dayjs');
 const customParseFormat = require('dayjs/plugin/customParseFormat');
 const timezone = require('dayjs/plugin/timezone'); // Add this
 const utc = require('dayjs/plugin/utc');           // Add this
@@ -13,9 +13,9 @@ dayjs.extend(timezone); // Add this
 
 // Set default timezone to IST
 dayjs.tz.setDefault("Asia/Kolkata");
-const { google } = require('googleapis'); 
+const { google } = require('googleapis');
 const fs = require('fs');
-const path = require('path'); 
+const path = require('path');
 const multer = require('multer');
 const csv = require('csv-parser');
 
@@ -26,7 +26,7 @@ const upload = multer({ dest: '/tmp' });
 
 // --- DATABASE CONNECTION ---
 const db = mysql.createPool({
-    host: process.env.DB_HOST, 
+    host: process.env.DB_HOST,
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
@@ -35,7 +35,7 @@ const db = mysql.createPool({
     queueLimit: 0,
     enableKeepAlive: true,
     keepAliveInitialDelay: 0,
-    dateStrings: true 
+    dateStrings: true
 });
 
 // --- GOOGLE AUTH ---
@@ -67,26 +67,26 @@ const parseToMySQLDate = (d) => {
 };
 const parseDate = (d) => {
     if (!d || d.toString().trim() === "") return null;
-    
+
     const dateStr = d.toString().trim();
     const formats = ['DD/MM/YYYY HH:mm:ss', 'YYYY-MM-DD HH:mm:ss', 'DD/MM/YYYY', 'YYYY-MM-DD'];
-    
+
     // 1. First, create a basic dayjs object to check validity
     const dt = dayjs(dateStr, formats, true);
-    
+
     // 2. If valid, convert it to the Asia/Kolkata timezone
     if (dt.isValid()) {
         return dayjs.tz(dateStr, formats, "Asia/Kolkata");
     }
-    
+
     return null;
 };
 const addWorkdays = (startDate, days) => {
     if (!startDate) return null;
-    
+
     // Handle both dayjs objects and raw strings
     let d = dayjs.isDayjs(startDate) ? startDate : dayjs.tz(startDate, "Asia/Kolkata");
-    
+
     if (!d || !d.isValid()) return null;
 
     let added = 0;
@@ -98,37 +98,37 @@ const addWorkdays = (startDate, days) => {
             added++;
         }
     }
-    
+
     // If result falls on Sunday, move to Monday
     if (d.day() === 0) {
         d = d.add(1, 'day');
     }
-    
+
     return d;
 };
 // --- AUTH & USERS ---
 app.post('/login', async (req, res) => { try { const [r] = await db.query("SELECT * FROM users WHERE (email = ? OR mobile = ?) AND password = ?", [req.body.identifier, req.body.identifier, req.body.password]); res.json(r.length ? r[0] : { message: "User not found" }); } catch (e) { res.status(500).json(e); } });
 app.get('/users', async (req, res) => { const [r] = await db.query("SELECT * FROM users"); res.json(r); });
-app.post('/users', async (req, res) => { await db.query("INSERT INTO users (name, role, department, email, mobile, password) VALUES (?,?,?,?,?,?)", [req.body.name, req.body.role, req.body.department, req.body.email, req.body.mobile, req.body.password]); res.json({message:"Created"}); });
-app.put('/users/update', async (req, res) => { const { name, email, role, department, mobile, id, password } = req.body; if(password && password.trim() !== "") await db.query("UPDATE users SET name=?, email=?, role=?, department=?, mobile=?, password=? WHERE id=?", [name, email, role, department, mobile, password, id]); else await db.query("UPDATE users SET name=?, email=?, role=?, department=?, mobile=? WHERE id=?", [name, email, role, department, mobile, id]); res.json({message:"Updated"}); });
-app.delete('/users/:id', async (req, res) => { await db.query("DELETE FROM users WHERE id=?", [req.params.id]); res.json({message: "User Deleted"}); });
-app.post('/users/change-password-secure', async (req, res) => { const { id, currentPassword, newPassword } = req.body; const [u] = await db.query("SELECT * FROM users WHERE id=? AND password=?", [id, currentPassword]); if(u.length === 0) return res.status(401).json({message: "Current password incorrect"}); await db.query("UPDATE users SET password=? WHERE id=?", [newPassword, id]); res.json({message: "Password Changed"}); });
+app.post('/users', async (req, res) => { await db.query("INSERT INTO users (name, role, department, email, mobile, password) VALUES (?,?,?,?,?,?)", [req.body.name, req.body.role, req.body.department, req.body.email, req.body.mobile, req.body.password]); res.json({ message: "Created" }); });
+app.put('/users/update', async (req, res) => { const { name, email, role, department, mobile, id, password } = req.body; if (password && password.trim() !== "") await db.query("UPDATE users SET name=?, email=?, role=?, department=?, mobile=?, password=? WHERE id=?", [name, email, role, department, mobile, password, id]); else await db.query("UPDATE users SET name=?, email=?, role=?, department=?, mobile=? WHERE id=?", [name, email, role, department, mobile, id]); res.json({ message: "Updated" }); });
+app.delete('/users/:id', async (req, res) => { await db.query("DELETE FROM users WHERE id=?", [req.params.id]); res.json({ message: "User Deleted" }); });
+app.post('/users/change-password-secure', async (req, res) => { const { id, currentPassword, newPassword } = req.body; const [u] = await db.query("SELECT * FROM users WHERE id=? AND password=?", [id, currentPassword]); if (u.length === 0) return res.status(401).json({ message: "Current password incorrect" }); await db.query("UPDATE users SET password=? WHERE id=?", [newPassword, id]); res.json({ message: "Password Changed" }); });
 
 // --- DASHBOARD ---
 // --- HIGH-PERFORMANCE DASHBOARD ROUTE ---
-app.get('/dashboard/:email/:role', async (req, res) => { 
+app.get('/dashboard/:email/:role', async (req, res) => {
     try {
         const { email, role } = req.params;
-        const { filterEmail } = req.query; 
-        
+        const { filterEmail } = req.query;
+
         const todayStr = dayjs().format('YYYY-MM-DD');
         const endOfToday = dayjs().endOf('day').format('YYYY-MM-DD HH:mm:ss');
         const targetEmail = (role === 'Admin' && filterEmail) ? filterEmail : email;
         const isFiltered = (role === 'Admin' && !filterEmail) ? false : true;
 
         // --- 1. OPTIMIZED DELEGATION & CHECKLIST SUMMARY (Combined into 1 Query) ---
-        const base = !isFiltered ? "1=1" : `assigned_to_email='${targetEmail}'`; 
-        const chkBase = !isFiltered ? "1=1" : `employee_email='${targetEmail}'`; 
+        const base = !isFiltered ? "1=1" : `assigned_to_email='${targetEmail}'`;
+        const chkBase = !isFiltered ? "1=1" : `employee_email='${targetEmail}'`;
 
         const summarySql = `
             SELECT 
@@ -142,9 +142,9 @@ app.get('/dashboard/:email/:role', async (req, res) => {
 
         // --- 2. OPTIMIZED FMS SUMMARY ---
         let fmsStepFilter = "";
-        if(isFiltered) {
-            const [mySteps] = await db.query("SELECT step_id FROM fms_dibiaa_steps_config WHERE doer_emails LIKE ?", [`%${targetEmail}%`]); 
-            const ids = mySteps.length > 0 ? mySteps.map(s => s.step_id).join(',') : '0'; 
+        if (isFiltered) {
+            const [mySteps] = await db.query("SELECT step_id FROM fms_dibiaa_steps_config WHERE doer_emails LIKE ?", [`%${targetEmail}%`]);
+            const ids = mySteps.length > 0 ? mySteps.map(s => s.step_id).join(',') : '0';
             fmsStepFilter = `AND t.step_id IN (${ids})`;
         }
 
@@ -175,25 +175,25 @@ app.get('/dashboard/:email/:role', async (req, res) => {
 
         // --- 4. COMBINED RESPONSE ---
         res.json({
-            delegation: { 
-                pending: summary.delPending, 
-                revised: summary.delRevised, 
-                completed: summary.delCompleted, 
-                today: delTodayList[0] 
+            delegation: {
+                pending: summary.delPending,
+                revised: summary.delRevised,
+                completed: summary.delCompleted,
+                today: delTodayList[0]
             },
-            checklist: { 
-                pending: chkTodayList[0].length, 
-                total: summary.chkTotal, 
+            checklist: {
+                pending: chkTodayList[0].length,
+                total: summary.chkTotal,
                 completed: summary.chkCompleted,
                 today: chkTodayList[0]
             },
-            fms: { 
-                pending: fmsTodayList[0].length, 
-                total: fmsSum.total || 0, 
+            fms: {
+                pending: fmsTodayList[0].length,
+                total: fmsSum.total || 0,
                 completed: fmsSum.completed || 0,
                 today: fmsTodayList[0]
             }
-        }); 
+        });
     } catch (err) {
         console.error("Optimized Dashboard Error:", err);
         res.status(500).json({ error: err.message });
@@ -201,47 +201,47 @@ app.get('/dashboard/:email/:role', async (req, res) => {
 });
 
 // --- CHECKLIST MODULE (FIXED EMAIL STORAGE) ---
-app.post('/checklist', async (req, res) => { 
+app.post('/checklist', async (req, res) => {
     // Destructure using employee_email
-    const { description, employee_email, employee_name, frequency, start_date } = req.body; 
-    
+    const { description, employee_email, employee_name, frequency, start_date } = req.body;
+
     console.log("Received Email:", employee_email); // Debugging line
 
-    const [h] = await db.query("SELECT holiday_date FROM holidays"); 
-    const holidays = new Set(h.map(x => dayjs(x.holiday_date).format('YYYY-MM-DD'))); 
-    
-    const tasks = []; 
-    let current = dayjs(start_date); 
-    const endOfYear = dayjs().endOf('year'); 
+    const [h] = await db.query("SELECT holiday_date FROM holidays");
+    const holidays = new Set(h.map(x => dayjs(x.holiday_date).format('YYYY-MM-DD')));
+
+    const tasks = [];
+    let current = dayjs(start_date);
+    const endOfYear = dayjs().endOf('year');
 
     while (current.isBefore(endOfYear) || current.isSame(endOfYear, 'day')) {
-        const formattedDate = current.format('YYYY-MM-DD'); 
+        const formattedDate = current.format('YYYY-MM-DD');
         const isSunday = current.day() === 0;
 
         if ((!isSunday || formattedDate === start_date) && !holidays.has(formattedDate)) {
             tasks.push([
-                'CHK-' + Math.floor(Math.random() * 1000000), 
-                description, 
+                'CHK-' + Math.floor(Math.random() * 1000000),
+                description,
                 employee_email, // Index 2: matches column employee_email
-                employee_name, 
-                frequency, 
-                formattedDate, 
+                employee_name,
+                frequency,
+                formattedDate,
                 'Pending'
             ]);
         }
-        
+
         if (frequency === 'Daily') current = current.add(1, 'day');
         else if (frequency === 'Weekly') current = current.add(1, 'week');
         else if (frequency === 'Monthly') current = current.add(1, 'month');
         else if (frequency === 'Quarterly') current = current.add(3, 'month');
         else if (frequency === 'Yearly') current = current.add(1, 'year');
         else break;
-    } 
+    }
 
     if (tasks.length > 0) {
         // Ensure column order here matches the tasks.push order exactly
         const sql = "INSERT INTO checklist_tasks (uid, description, employee_email, employee_name, frequency, target_date, status) VALUES ?";
-        await db.query(sql, [tasks]); 
+        await db.query(sql, [tasks]);
         res.json({ message: `Generated ${tasks.length} tasks` });
     } else {
         res.json({ message: "No tasks generated" });
@@ -249,11 +249,11 @@ app.post('/checklist', async (req, res) => {
 });
 
 // FETCH CHECKLIST
-app.get('/checklist/:email/:role', async (req, res) => { 
-    const today = dayjs().format('YYYY-MM-DD'); 
+app.get('/checklist/:email/:role', async (req, res) => {
+    const today = dayjs().format('YYYY-MM-DD');
     let q = "";
     let params = [];
-    
+
     if (req.params.role === 'Admin') {
         q = "SELECT * FROM checklist_tasks WHERE status != 'Completed' AND target_date <= ? ORDER BY target_date ASC";
         params = [today];
@@ -261,26 +261,26 @@ app.get('/checklist/:email/:role', async (req, res) => {
         q = "SELECT * FROM checklist_tasks WHERE employee_email=? AND status != 'Completed' AND target_date <= ? ORDER BY target_date ASC";
         params = [req.params.email, today];
     }
-    
-    const [r] = await db.query(q, params); 
-    res.json(r); 
+
+    const [r] = await db.query(q, params);
+    res.json(r);
 });
 
-app.put('/checklist/complete', async (req, res) => { await db.query("UPDATE checklist_tasks SET status='Completed', completed_at=NOW() WHERE id=?", [req.body.id]); res.json({message:"Done"}); });
+app.put('/checklist/complete', async (req, res) => { await db.query("UPDATE checklist_tasks SET status='Completed', completed_at=NOW() WHERE id=?", [req.body.id]); res.json({ message: "Done" }); });
 
 // --- TASKS MODULE ---
-app.post('/tasks', async (req, res) => { await db.query("INSERT INTO tasks (task_uid,employee_name,assigned_to_email,approver_email,description,target_date,priority,approval_needed,assigned_by,remarks,status,previous_status) VALUES (?,?,?,?,?,?,?,?,?,?,'Pending','Pending')",['T-'+Math.floor(Math.random()*9000),req.body.employee_name,req.body.email,req.body.approver_email,req.body.description,req.body.target_date,req.body.priority,req.body.approval_needed,req.body.assigned_by||'System',req.body.remarks||'']); res.json({message:"Delegated"}); });
-app.get('/tasks/:email/:role', async (req, res) => { const q=req.params.role==='Admin'?"SELECT * FROM tasks ORDER BY created_at DESC":"SELECT * FROM tasks WHERE assigned_to_email=? ORDER BY created_at DESC"; const [r]=await db.query(q,[req.params.email]); res.json(r); });
-app.delete('/tasks/:id', async (req, res) => { await db.query("DELETE FROM tasks WHERE id=?", [req.params.id]); res.json({message:"Deleted"}); });
-app.put('/tasks/update-status', async (req, res) => { const {id,status,revised_date,remarks,is_rejection}=req.body; if(is_rejection) await db.query("UPDATE tasks SET status = CASE WHEN previous_status IS NULL OR previous_status='' OR previous_status='Waiting Approval' THEN 'Pending' ELSE previous_status END WHERE id=?", [id]); else if(status==='Revision Requested') await db.query("UPDATE tasks SET previous_status=status, status=?, revised_date_request=?, revision_remarks=? WHERE id=?", [status,revised_date,remarks,id]); else if(status==='Revised') await db.query("UPDATE tasks SET status='Revised', target_date=revised_date_request WHERE id=?", [id]); else await db.query("UPDATE tasks SET previous_status=status, status=? WHERE id=?", [status,id]); res.json({message:"Updated"}); });
+app.post('/tasks', async (req, res) => { await db.query("INSERT INTO tasks (task_uid,employee_name,assigned_to_email,approver_email,description,target_date,priority,approval_needed,assigned_by,remarks,status,previous_status) VALUES (?,?,?,?,?,?,?,?,?,?,'Pending','Pending')", ['T-' + Math.floor(Math.random() * 9000), req.body.employee_name, req.body.email, req.body.approver_email, req.body.description, req.body.target_date, req.body.priority, req.body.approval_needed, req.body.assigned_by || 'System', req.body.remarks || '']); res.json({ message: "Delegated" }); });
+app.get('/tasks/:email/:role', async (req, res) => { const q = req.params.role === 'Admin' ? "SELECT * FROM tasks ORDER BY created_at DESC" : "SELECT * FROM tasks WHERE assigned_to_email=? ORDER BY created_at DESC"; const [r] = await db.query(q, [req.params.email]); res.json(r); });
+app.delete('/tasks/:id', async (req, res) => { await db.query("DELETE FROM tasks WHERE id=?", [req.params.id]); res.json({ message: "Deleted" }); });
+app.put('/tasks/update-status', async (req, res) => { const { id, status, revised_date, remarks, is_rejection } = req.body; if (is_rejection) await db.query("UPDATE tasks SET status = CASE WHEN previous_status IS NULL OR previous_status='' OR previous_status='Waiting Approval' THEN 'Pending' ELSE previous_status END WHERE id=?", [id]); else if (status === 'Revision Requested') await db.query("UPDATE tasks SET previous_status=status, status=?, revised_date_request=?, revision_remarks=? WHERE id=?", [status, revised_date, remarks, id]); else if (status === 'Revised') await db.query("UPDATE tasks SET status='Revised', target_date=revised_date_request WHERE id=?", [id]); else await db.query("UPDATE tasks SET previous_status=status, status=? WHERE id=?", [status, id]); res.json({ message: "Updated" }); });
 app.put('/tasks/edit/:id', async (req, res) => { const { description, target_date, priority, approval_needed, remarks, assigned_to_email, approver_email, employee_name } = req.body; await db.query("UPDATE tasks SET description=?, target_date=?, priority=?, approval_needed=?, remarks=?, assigned_to_email=?, approver_email=?, employee_name=? WHERE id=?", [description, target_date, priority, approval_needed, remarks, assigned_to_email, approver_email, employee_name, req.params.id]); res.json({ message: "Task Updated" }); });
-app.get('/comments/:taskId', async (req, res) => { const [r]=await db.query("SELECT id,task_id,user_name,comment,DATE_FORMAT(created_at,'%d/%m/%Y %H:%i:%s') as formatted_date FROM task_comments WHERE task_id=? ORDER BY created_at DESC",[req.params.taskId]); res.json(r); });
-app.post('/comments', async (req, res) => { await db.query("INSERT INTO task_comments (task_id,user_name,comment) VALUES (?,?,?)",[req.body.task_id,req.body.user_name,req.body.comment]); res.json({message:"Added"}); });
+app.get('/comments/:taskId', async (req, res) => { const [r] = await db.query("SELECT id,task_id,user_name,comment,DATE_FORMAT(created_at,'%d/%m/%Y %H:%i:%s') as formatted_date FROM task_comments WHERE task_id=? ORDER BY created_at DESC", [req.params.taskId]); res.json(r); });
+app.post('/comments', async (req, res) => { await db.query("INSERT INTO task_comments (task_id,user_name,comment) VALUES (?,?,?)", [req.body.task_id, req.body.user_name, req.body.comment]); res.json({ message: "Added" }); });
 app.get('/approvals/:email', async (req, res) => { const [u] = await db.query("SELECT role FROM users WHERE email=?", [req.params.email]); let q = "SELECT * FROM tasks WHERE status IN ('Waiting Approval','Revision Requested')"; let params = []; if (u.length === 0 || u[0].role !== 'Admin') { q += " AND LOWER(approver_email)=LOWER(?)"; params.push(req.params.email); } const [r] = await db.query(q, params); res.json(r); });
 app.get('/holidays', async (req, res) => { const [r] = await db.query("SELECT * FROM holidays ORDER BY holiday_date"); res.json(r); });
-app.post('/holidays', async (req, res) => { await db.query("INSERT INTO holidays (holiday_date, name) VALUES (?,?)", [req.body.date, req.body.name]); res.json({message:"Added"}); });
-app.get('/mis/tasks', async (req, res) => { const [rows]=await db.query("SELECT description,target_date,status,completed_at FROM tasks WHERE assigned_to_email=? AND target_date BETWEEN ? AND ? ORDER BY target_date",[req.query.email,req.query.start,req.query.end]); res.json(rows); });
-app.post('/mis/plan', async (req, res) => { const {email,date,count}=req.body; const [ex]=await db.query("SELECT id FROM employee_plans WHERE employee_email=? AND plan_date=?",[email,date]); if(ex.length>0) await db.query("UPDATE employee_plans SET planned_count=? WHERE id=?",[count,ex[0].id]); else await db.query("INSERT INTO employee_plans (employee_email,plan_date,planned_count) VALUES (?,?,?)",[email,date,count]); res.json({message:"Saved"}); });
+app.post('/holidays', async (req, res) => { await db.query("INSERT INTO holidays (holiday_date, name) VALUES (?,?)", [req.body.date, req.body.name]); res.json({ message: "Added" }); });
+app.get('/mis/tasks', async (req, res) => { const [rows] = await db.query("SELECT description,target_date,status,completed_at FROM tasks WHERE assigned_to_email=? AND target_date BETWEEN ? AND ? ORDER BY target_date", [req.query.email, req.query.start, req.query.end]); res.json(rows); });
+app.post('/mis/plan', async (req, res) => { const { email, date, count } = req.body; const [ex] = await db.query("SELECT id FROM employee_plans WHERE employee_email=? AND plan_date=?", [email, date]); if (ex.length > 0) await db.query("UPDATE employee_plans SET planned_count=? WHERE id=?", [count, ex[0].id]); else await db.query("INSERT INTO employee_plans (employee_email,plan_date,planned_count) VALUES (?,?,?)", [email, date, count]); res.json({ message: "Saved" }); });
 
 // 1. FMS Task Tracker by Job Number
 app.get('/fms/track/:job_number', async (req, res) => {
@@ -316,7 +316,7 @@ app.get('/fms/report-summary', async (req, res) => {
         WHERE t.plan_date BETWEEN ? AND ?
         GROUP BY s.step_id, s.step_name
         ORDER BY s.step_id ASC`;
-    
+
     try {
         const [rows] = await db.query(sql, [start, end]);
         res.json(rows);
@@ -327,7 +327,7 @@ app.get('/fms/report-summary', async (req, res) => {
 });
 
 // --- UPLOADS ---
-app.post('/tasks/upload', upload.single('file'), async (req, res) => { if (!req.file) return res.status(400).json({ message: "No file uploaded" }); try { const results = []; fs.createReadStream(req.file.path).pipe(csv()).on('data', (data) => results.push(data)).on('end', async () => { const [users] = await db.query("SELECT email, name FROM users"); const bulkTasks = []; const assignedBy = req.body.assigned_by || 'Admin Upload'; for (const row of results) { const empName = users.find(u => u.email === row.employee_email)?.name || row.employee_email; const tDate = parseToMySQLDate(row.target_date); if(tDate) { bulkTasks.push(['T-'+Math.floor(Math.random()*90000), empName, row.employee_email, row.approver_email, row.description, tDate, row.priority || 'Medium', row.approval_needed || 'No', assignedBy, row.remarks || '', 'Pending', 'Pending']); } } if (bulkTasks.length > 0) { await db.query("INSERT INTO tasks (task_uid,employee_name,assigned_to_email,approver_email,description,target_date,priority,approval_needed,assigned_by,remarks,status,previous_status) VALUES ?", [bulkTasks]); } fs.unlinkSync(req.file.path); res.json({ message: `Delegated ${bulkTasks.length} tasks.` }); }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.post('/tasks/upload', upload.single('file'), async (req, res) => { if (!req.file) return res.status(400).json({ message: "No file uploaded" }); try { const results = []; fs.createReadStream(req.file.path).pipe(csv()).on('data', (data) => results.push(data)).on('end', async () => { const [users] = await db.query("SELECT email, name FROM users"); const bulkTasks = []; const assignedBy = req.body.assigned_by || 'Admin Upload'; for (const row of results) { const empName = users.find(u => u.email === row.employee_email)?.name || row.employee_email; const tDate = parseToMySQLDate(row.target_date); if (tDate) { bulkTasks.push(['T-' + Math.floor(Math.random() * 90000), empName, row.employee_email, row.approver_email, row.description, tDate, row.priority || 'Medium', row.approval_needed || 'No', assignedBy, row.remarks || '', 'Pending', 'Pending']); } } if (bulkTasks.length > 0) { await db.query("INSERT INTO tasks (task_uid,employee_name,assigned_to_email,approver_email,description,target_date,priority,approval_needed,assigned_by,remarks,status,previous_status) VALUES ?", [bulkTasks]); } fs.unlinkSync(req.file.path); res.json({ message: `Delegated ${bulkTasks.length} tasks.` }); }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.post('/checklist/upload', upload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
     try {
@@ -341,7 +341,7 @@ app.post('/checklist/upload', upload.single('file'), async (req, res) => {
             for (const row of results) {
                 const targetEmail = row.employee_email;
                 const userMatch = users.find(u => u.email === targetEmail);
-                const empName = userMatch?.name || targetEmail; 
+                const empName = userMatch?.name || targetEmail;
                 const startDateStr = parseToMySQLDate(row.start_date);
                 if (startDateStr) {
                     let current = dayjs(startDateStr);
@@ -378,7 +378,7 @@ app.post('/checklist/upload', upload.single('file'), async (req, res) => {
 // DELETE CHECKLIST TASK
 app.delete('/checklist/:id', async (req, res) => {
     const { id } = req.params;
-    const { deleteAll } = req.query; 
+    const { deleteAll } = req.query;
 
     try {
         if (deleteAll === 'true') {
@@ -404,9 +404,9 @@ app.delete('/checklist/:id', async (req, res) => {
 });
 
 // --- MIS REPORT ---
-app.get('/mis/report', async (req, res) => { 
-    const {start,end}=req.query; 
-    const sql=`
+app.get('/mis/report', async (req, res) => {
+    const { start, end } = req.query;
+    const sql = `
         SELECT u.name as employee_name, u.email as employee_email,
         COALESCE((
             SELECT planned_count 
@@ -424,9 +424,9 @@ app.get('/mis/report', async (req, res) => {
         LEFT JOIN tasks t ON u.email=t.assigned_to_email AND t.target_date BETWEEN ? AND ? 
         WHERE u.role!='Admin' 
         GROUP BY u.email,u.name 
-        HAVING total_task > 0 OR planned > 0`; 
-    const [rows]=await db.query(sql,[end, start, end]); 
-    res.json(rows); 
+        HAVING total_task > 0 OR planned > 0`;
+    const [rows] = await db.query(sql, [end, start, end]);
+    res.json(rows);
 });
 
 app.post('/fms/sync-dibiaa', async (req, res) => {
@@ -480,20 +480,20 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
 
             const getAct = (s) => taskMap[`${jobId}_${s}`]?.actual || null;
 
-            const A = parseDate(r[0]); 
-            const B = r[1];           
-            const F = r[5];           
-            const G = r[6];           
-            const I = r[8];           
-            const K = r[10];          
-            const N = parseDate(r[13]); 
+            const A = parseDate(r[0]);
+            const B = r[1];
+            const F = r[5];
+            const G = r[6];
+            const I = r[8];
+            const K = r[10];
+            const N = parseDate(r[13]);
 
             const hasInner = K && K.toLowerCase().includes('inner print') || K.toLowerCase().includes('inner screen print');
             const hasReadystock = K && K.toLowerCase().includes('ready to stock');
             const isOffsetFoil = (I === 'Offset Print' || I === 'Foil Print' || I === 'No');
             const isScreenPrint = (I === 'Screen print');
 
-            let plans = {}; 
+            let plans = {};
 
             // --- START LOGIC ---
             if (A) plans[4] = addWorkdays(A, 3);  //step4
@@ -507,9 +507,9 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
                 plans[2] = addWorkdays(getAct(4), 1);
             }
             //step2
-                
-            if (!(F === 'Paper Box' )) {
-            if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1);  //step3
+
+            if (!(F === 'Paper Box')) {
+                if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1);  //step3
             }
 
             // const step1Act = getAct(1);
@@ -521,7 +521,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             //     plans[2] = addWorkdays(step4Act, 1);
             // }
 
-            
+
 
             if (!(F === 'Paper Bag' || F === 'Paper Box' || (F || '').endsWith('Tray'))) {
                 if (getAct(2)) plans[5] = addWorkdays(getAct(2), 4);
@@ -529,10 +529,10 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
 
 
             // step6-foiling
-            if (I === 'Foil Print' && F==='Paper Bag' && getAct(7)) {
+            if (I === 'Foil Print' && F === 'Paper Bag' && getAct(7)) {
                 plans[6] = addWorkdays(getAct(7), 3);
-            } 
-            else if (I === 'Foil Print' && getAct(3)) {plans[6] = addWorkdays(getAct(3), 3);}
+            }
+            else if (I === 'Foil Print' && getAct(3)) { plans[6] = addWorkdays(getAct(3), 3); }
 
 
             // step7 - die cutting
@@ -541,18 +541,19 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             }
             else if (I !== 'Foil Print' && getAct(3)) {
                 plans[7] = addWorkdays(getAct(3), 3);
-            }else if (I === 'Foil Print' && F==='Paper Bag' && getAct(3)) {
+            } else if (I === 'Foil Print' && F === 'Paper Bag' && getAct(3)) {
                 plans[7] = addWorkdays(getAct(3), 3);
-            }          
-            else if (getAct(6)){ plans[7] = addWorkdays(getAct(6), 3);
+            }
+            else if (getAct(6)) {
+                plans[7] = addWorkdays(getAct(6), 3);
 
             }
 
             // step 8 - full kitting
-            if (I === 'Foil Print' && F==='Paper Bag' && getAct(6)) {
+            if (I === 'Foil Print' && F === 'Paper Bag' && getAct(6)) {
                 plans[8] = addWorkdays(getAct(6), 3);
-            } 
-            else if (getAct(7)) {plans[8] = addWorkdays(getAct(7), 1);}
+            }
+            else if (getAct(7)) { plans[8] = addWorkdays(getAct(7), 1); }
 
             // if (getAct(8)) {
             //     const condition = (G === 'Magnetic' || (G || '').startsWith('Sliding Handle') && I === 'Screen print') || (G === 'Magnetic' && isOffsetFoil && hasInner) || (G === 'Magnetic' && hasInner && I === 'Screen print');
@@ -573,10 +574,10 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
                 plans[9] = addWorkdays(getAct(8), 1);
             }
 
-            const isTopBottom = G === 'Top-Bottom'; 
-            const isSlidingBox = G === 'Sliding Box'; 
+            const isTopBottom = G === 'Top-Bottom';
+            const isSlidingBox = G === 'Sliding Box';
             const isMagnetic = G === 'Magnetic';
-            const isSlidingHandle = G === 'Sliding Handle Box'; 
+            const isSlidingHandle = G === 'Sliding Handle Box';
             const isPaperBag = F === 'Paper Bag';
 
             let targetDate10 = null;
@@ -598,9 +599,9 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
 
             if (innercase1) {
                 plans[11] = addWorkdays(getAct(8), 1);
-            }else if(innercase2){
+            } else if (innercase2) {
                 plans[11] = addWorkdays(getAct(12), 1);
-            }else if(innercase3){
+            } else if (innercase3) {
                 plans[11] = addWorkdays(getAct(9), 1);
             }
 
@@ -609,7 +610,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
 
             let targetDate12 = null;
 
-            if (hasReadystock && I==='Screen print') targetDate12 = getAct(2);
+            if (hasReadystock && I === 'Screen print') targetDate12 = getAct(2);
             else if (isPaperBag && isScreenPrint) targetDate12 = getAct(8);
             else if ((isMagnetic || isSlidingHandle) && I === 'Screen print') targetDate12 = getAct(9);
             else if ((isMagnetic && hasInner) && I === 'Screen print') targetDate12 = getAct(9);
@@ -622,20 +623,20 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
 
             const isboxtypecon = (F === 'Cards' || F === 'Hooks');
             // const base13 = getAct(12) || getAct(11) || getAct(10);
-            if (hasReadystock && I==='No') plans[13] = addWorkdays(getAct(2), 1);
+            if (hasReadystock && I === 'No') plans[13] = addWorkdays(getAct(2), 1);
             else if (isboxtypecon) plans[13] = addWorkdays(getAct(2), 1);
             else if (F === 'Foam' && getAct(5)) plans[13] = addWorkdays(getAct(5), 1);
             else if (F === 'Paper Box' && getAct(8)) plans[13] = addWorkdays(getAct(8), 1);
-            else if (isPaperBag && isScreenPrint) plans[13] = addWorkdays(getAct(10), 1);    
-            else if (isPaperBag && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);    
-            else if (isMagnetic && hasInner && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);    
-            else if ((isMagnetic || isSlidingHandle) && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);    
-            else if ((isMagnetic || isSlidingHandle) && isScreenPrint) plans[13] = addWorkdays(getAct(10), 1);    
-            else if (isTopBottom && hasInner && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);    
-            else if (isTopBottom && hasInner && isScreenPrint) plans[13] = addWorkdays(getAct(12), 1);    
-            else if ((isTopBottom || isSlidingBox) && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);    
-            else if ((isTopBottom || isSlidingBox)  && isScreenPrint) plans[13] = addWorkdays(getAct(12), 1);    
-            
+            else if (isPaperBag && isScreenPrint) plans[13] = addWorkdays(getAct(10), 1);
+            else if (isPaperBag && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
+            else if (isMagnetic && hasInner && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
+            else if ((isMagnetic || isSlidingHandle) && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
+            else if ((isMagnetic || isSlidingHandle) && isScreenPrint) plans[13] = addWorkdays(getAct(10), 1);
+            else if (isTopBottom && hasInner && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
+            else if (isTopBottom && hasInner && isScreenPrint) plans[13] = addWorkdays(getAct(12), 1);
+            else if ((isTopBottom || isSlidingBox) && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
+            else if ((isTopBottom || isSlidingBox) && isScreenPrint) plans[13] = addWorkdays(getAct(12), 1);
+
 
 
 
@@ -643,7 +644,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
 
             if (getAct(13)) plans[14] = addWorkdays(getAct(13), 1);
             if (getAct(14)) plans[15] = addWorkdays(getAct(14), 1);
-            
+
             if (N) plans[16] = N;
 
             // --- 4. DATA SYNCHRONIZATION WITH "ACTUAL" CHECK ---
@@ -671,7 +672,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
         }
 
         if (taskUpdates.length > 0) {
-    const taskSql = `
+            const taskSql = `
         INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) 
         VALUES ? 
         ON DUPLICATE KEY UPDATE 
@@ -685,9 +686,9 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             -- 3. Otherwise, UPDATE to the new calculated plan date
             ELSE VALUES(plan_date)
         END`;
-    
-    await db.query(taskSql, [taskUpdates]);
-}
+
+            await db.query(taskSql, [taskUpdates]);
+        }
 
         res.json({ message: `Sync Complete. Deleted ${tasksToDelete.length} obsolete tasks.` });
 
@@ -697,17 +698,17 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
     }
 });
 
-app.get('/fms/dibiaa-tasks', async (req, res) => { 
+app.get('/fms/dibiaa-tasks', async (req, res) => {
     try {
-        const { email, role } = req.query; 
-        const [configs] = await db.query("SELECT * FROM fms_dibiaa_steps_config"); 
-        
-        const relevantSteps = role === 'Admin' 
-            ? configs 
-            : configs.filter(c => c.doer_emails && c.doer_emails.includes(email)); 
-        
-        const stepIds = relevantSteps.map(s => s.step_id); 
-        if (stepIds.length === 0) return res.json({}); 
+        const { email, role } = req.query;
+        const [configs] = await db.query("SELECT * FROM fms_dibiaa_steps_config");
+
+        const relevantSteps = role === 'Admin'
+            ? configs
+            : configs.filter(c => c.doer_emails && c.doer_emails.includes(email));
+
+        const stepIds = relevantSteps.map(s => s.step_id);
+        if (stepIds.length === 0) return res.json({});
 
         // CRITICAL CHANGE: We JOIN tasks (t) with raw (r) using job_id
         const [tasks] = await db.query(`
@@ -728,13 +729,13 @@ app.get('/fms/dibiaa-tasks', async (req, res) => {
     WHERE t.status = 'Pending' AND t.step_id IN (?) 
     ORDER BY t.plan_date ASC`, [stepIds]);
 
-        const grouped = {}; 
-        relevantSteps.forEach(s => { 
-            const stepTasks = tasks.filter(t => t.step_id === s.step_id); 
-            if (stepTasks.length > 0) grouped[s.step_name] = stepTasks; 
-        }); 
+        const grouped = {};
+        relevantSteps.forEach(s => {
+            const stepTasks = tasks.filter(t => t.step_id === s.step_id);
+            if (stepTasks.length > 0) grouped[s.step_name] = stepTasks;
+        });
 
-        res.json(grouped); 
+        res.json(grouped);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -759,10 +760,10 @@ app.post('/fms/dibiaa-complete', async (req, res) => {
 
         // 3. Update database with ALL fields
         await db.query(
-        "UPDATE fms_dibiaa_tasks SET status='Completed', actual_date=?, delay_hours=?, delay_reason=?, custom_field_1=?, custom_field_2=? WHERE id=?", 
-        [nowIST, delayHrs > 0 ? delayHrs : 0, delay_reason, contractor || printer, qty, task_id]
-    );
-    res.json({message: "Task Completed"});
+            "UPDATE fms_dibiaa_tasks SET status='Completed', actual_date=?, delay_hours=?, delay_reason=?, custom_field_1=?, custom_field_2=? WHERE id=?",
+            [nowIST, delayHrs > 0 ? delayHrs : 0, delay_reason, contractor || printer, qty, task_id]
+        );
+        res.json({ message: "Task Completed" });
 
     } catch (error) {
         console.error("Error completing FMS task:", error);
@@ -773,7 +774,7 @@ app.post('/fms/dibiaa-complete', async (req, res) => {
 app.get('/fms/rolling-report', async (req, res) => {
     const { start, end, client, city, step } = req.query;
     let params = [start, end];
-    
+
     // Condition 1: Step 16 (Dispatch) has a plan date.
     // Condition 2: Step 13 (QC + Packing) Actual Date is still NULL or empty.
     let whereClause = `
@@ -810,7 +811,7 @@ app.get('/fms/rolling-report', async (req, res) => {
 
     try {
         const [rows] = await db.query(sql, params);
-        
+
         const stats = {
             uniqueClients: new Set(rows.map(r => r.company_name)).size,
             totalJobs: rows.length,
@@ -866,108 +867,159 @@ const performFmsSync = async () => {
         const isOffsetFoil = (I === 'Offset Print' || I === 'Foil Print' || I === 'No');
         const isScreenPrint = (I === 'Screen print');
 
-        let plans = {}; 
-        
-       // --- START LOGIC ---
-            if (A) plans[4] = addWorkdays(A, 3);  //step4
+        let plans = {};
 
-            const step4Act = getAct(4);
-            if ((B === 'OTD' || B === 'Jewellery (OTD)' && step4Act)) plans[1] = addWorkdays(step4Act, 6); // step1
+        // --- START LOGIC ---
+        if (A) plans[4] = addWorkdays(A, 3);  //step4
 
-            if ((B !== 'OTD' || B !== 'Jewellery (OTD)' && step4Act)) plans[2] = addWorkdays(step4Act, 1); //step2
-                
+        const step4Act = getAct(4);
+        if ((B === 'OTD' || B === 'Jewellery (OTD)' && step4Act)) plans[1] = addWorkdays(step4Act, 6); // step1
+
+        if (B === 'OTD' || B === 'Jewellery (OTD)') {
+            plans[2] = addWorkdays(getAct(1), 1);
+        } else if (getAct(4)) {
+            plans[2] = addWorkdays(getAct(4), 1);
+        }
+        //step2
+
+        if (!(F === 'Paper Box')) {
             if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1);  //step3
-            
+        }
 
-            // const step1Act = getAct(1);
-            // if ((B === 'OTD' || B === 'Jewellery (OTD)') && step1Act) {
-            //     plans[2] = addWorkdays(step1Act, 1);
-            // } else if ((B !== 'OTD' || B !== 'Jewellery (OTD)') && I === 'No' && A) {
-            //     plans[2] = addWorkdays(A, 1);
-            // } else if ((B !== 'OTD' || B !== 'Jewellery (OTD)') && I !== 'No' && step4Act){
-            //     plans[2] = addWorkdays(step4Act, 1);
-            // }
-
-            
-
-            if (!(F === 'Paper Bag' || F === 'Foam' || (F || '').endsWith('Tray'))) {
-                if (getAct(2)) plans[5] = addWorkdays(getAct(2), 4);
-            }
+        // const step1Act = getAct(1);
+        // if ((B === 'OTD' || B === 'Jewellery (OTD)') && step1Act) {
+        //     plans[2] = addWorkdays(step1Act, 1);
+        // } else if ((B !== 'OTD' || B !== 'Jewellery (OTD)') && I === 'No' && A) {
+        //     plans[2] = addWorkdays(A, 1);
+        // } else if ((B !== 'OTD' || B !== 'Jewellery (OTD)') && I !== 'No' && step4Act){
+        //     plans[2] = addWorkdays(step4Act, 1);
+        // }
 
 
-            // step6-foiling
-            if (I === 'Foil Print' && F==='Paper Bag' && getAct(7)) {
-                plans[6] = addWorkdays(getAct(7), 3);
-            } 
-            else if (I === 'Foil Print' && getAct(3)) {plans[6] = addWorkdays(getAct(3), 3);}
+
+        if (!(F === 'Paper Bag' || F === 'Paper Box' || (F || '').endsWith('Tray'))) {
+            if (getAct(2)) plans[5] = addWorkdays(getAct(2), 4);
+        }
 
 
-            // step7 - die cutting
-            if (F === 'Paper Box' && getAct(2)) {
-                plans[7] = addWorkdays(getAct(2), 3);
-            }
-            else if (I !== 'Foil Print' && getAct(3)) {
-                plans[7] = addWorkdays(getAct(3), 3);
-            }else if (I === 'Foil Print' && F==='Paper Bag' && getAct(3)) {
-                plans[7] = addWorkdays(getAct(3), 3);
-            }          
-            else if (getAct(6)){ plans[7] = addWorkdays(getAct(6), 3);
+        // step6-foiling
+        if (I === 'Foil Print' && F === 'Paper Bag' && getAct(7)) {
+            plans[6] = addWorkdays(getAct(7), 3);
+        }
+        else if (I === 'Foil Print' && getAct(3)) { plans[6] = addWorkdays(getAct(3), 3); }
 
-            }
 
-            // step 8 - full kitting
-            if (I === 'Foil Print' && F==='Paper Bag' && getAct(6)) {
-                plans[8] = addWorkdays(getAct(6), 3);
-            } 
-            else if (getAct(7)) {plans[8] = addWorkdays(getAct(7), 1);}
+        // step7 - die cutting
+        if (F === 'Paper Box' && getAct(2)) {
+            plans[7] = addWorkdays(getAct(2), 3);
+        }
+        else if (I !== 'Foil Print' && getAct(3)) {
+            plans[7] = addWorkdays(getAct(3), 3);
+        } else if (I === 'Foil Print' && F === 'Paper Bag' && getAct(3)) {
+            plans[7] = addWorkdays(getAct(3), 3);
+        }
+        else if (getAct(6)) {
+            plans[7] = addWorkdays(getAct(6), 3);
 
-            if (getAct(8)) {
-                const condition = (G === 'Magnetic' || (G || '').startsWith('Sliding Handle') && I === 'Screen print') || (G === 'Magnetic' && isOffsetFoil && hasInner) || (G === 'Magnetic' && hasInner && I === 'Screen print');
-                if (condition) plans[9] = addWorkdays(getAct(8), 1);
-            }
+        }
 
-            const isTopBottom = G === 'Top-Bottom'; const isSlidingBox = G === 'Sliding Box'; const isMagnetic = G === 'Magnetic';
-            const isSlidingHandle = G === 'Sliding Handle Box'; 
-            
-            const isPaperBag = F === 'Paper Bag';
+        // step 8 - full kitting
+        if (I === 'Foil Print' && F === 'Paper Bag' && getAct(6)) {
+            plans[8] = addWorkdays(getAct(6), 3);
+        }
+        else if (getAct(7)) { plans[8] = addWorkdays(getAct(7), 1); }
 
-            let targetDate10 = null;
-            if (isPaperBag && isScreenPrint) targetDate10 = getAct(12);
-            else if (isPaperBag && isOffsetFoil) targetDate10 = getAct(8);
-            else if (isMagnetic && hasInner) targetDate10 = getAct(11);
-            else if ((isMagnetic || isSlidingHandle) && isOffsetFoil) targetDate10 = getAct(8);
-            else if ((isMagnetic || isSlidingHandle) && isScreenPrint) targetDate10 = getAct(12);
-            else if (isTopBottom && hasInner) targetDate10 = getAct(11);
-            else if (isTopBottom || isSlidingBox) targetDate10 = getAct(8);
-            if (targetDate10) plans[10] = addWorkdays(targetDate10, 2);
+        // if (getAct(8)) {
+        //     const condition = (G === 'Magnetic' || (G || '').startsWith('Sliding Handle') && I === 'Screen print') || (G === 'Magnetic' && isOffsetFoil && hasInner) || (G === 'Magnetic' && hasInner && I === 'Screen print');
+        //     if (condition) plans[9] = addWorkdays(getAct(8), 1);
+        // }
 
-            const base11 = getAct(10) || getAct(9) || getAct(8);
-            if (base11 && hasInner) plans[11] = addWorkdays(base11, 1);
+        // Case 1: (Magnetic OR Sliding) AND Screen Print
+        const case1 = (G === 'Magnetic' || (G || '').startsWith('Sliding Handle')) && I === 'Screen print';
 
-            // Step12 - Screen Printing
+        // Case 2: Magnetic AND Inner AND Offset Foil
+        const case2 = G === 'Magnetic' && hasInner && isOffsetFoil;
 
-            let targetDate12 = null;
+        // Case 3: Magnetic AND Inner AND Screen Print
+        const case3 = G === 'Magnetic' && hasInner && I === 'Screen print';
 
-            if (hasReadystock && I==='Screen print') targetDate12 = getAct(2);
-            else if (isPaperBag && isScreenPrint) targetDate12 = getAct(8);
-            else if ((isMagnetic || isSlidingHandle) && I === 'Screen print') targetDate12 = getAct(9);
-            else if ((isMagnetic && hasInner) && I === 'Screen print') targetDate12 = getAct(9);
-            else if ((isTopBottom && hasInner) && I === 'Screen print') targetDate12 = getAct(10);
-            else if ((isTopBottom || isSlidingBox) && I === 'Screen print') targetDate12 = getAct(10);
-            if (targetDate12) plans[12] = addWorkdays(targetDate12, 1);
+        // Apply the update if any of the cases are true
+        if (getAct(8) && (case1 || case2 || case3)) {
+            plans[9] = addWorkdays(getAct(8), 1);
+        }
 
-            const isboxtypecon = (F === 'Cards' || F === 'Hooks');
-            const base13 = getAct(12) || getAct(11) || getAct(10);
-            if (hasReadystock && I==='No') plans[13] = addWorkdays(getAct(2), 1);
-            else if (isboxtypecon) plans[13] = addWorkdays(getAct(2), 1);
-            else if (F === 'Foam' && getAct(5)) plans[13] = addWorkdays(getAct(5), 1);
-            else if (F === 'Paper Box' && getAct(8)) plans[13] = addWorkdays(getAct(8), 1);
-            else if (base13) plans[13] = addWorkdays(base13, 1);
+        const isTopBottom = G === 'Top-Bottom';
+        const isSlidingBox = G === 'Sliding Box';
+        const isMagnetic = G === 'Magnetic';
+        const isSlidingHandle = G === 'Sliding Handle Box';
+        const isPaperBag = F === 'Paper Bag';
 
-            if (getAct(13)) plans[14] = addWorkdays(getAct(13), 1);
-            if (getAct(14)) plans[15] = addWorkdays(getAct(14), 1);
-            
-            if (N) plans[16] = N;
+        let targetDate10 = null;
+        if (isPaperBag && isScreenPrint) targetDate10 = getAct(12);
+        else if (isPaperBag && isOffsetFoil) targetDate10 = getAct(8);
+        else if (isMagnetic && hasInner) targetDate10 = getAct(11);
+        else if ((isMagnetic || isSlidingHandle) && isOffsetFoil) targetDate10 = getAct(8);
+        else if ((isMagnetic || isSlidingHandle) && isScreenPrint) targetDate10 = getAct(12);
+        else if (isTopBottom && hasInner) targetDate10 = getAct(11);
+        else if (isTopBottom || isSlidingBox) targetDate10 = getAct(8);
+        if (targetDate10) plans[10] = addWorkdays(targetDate10, 2);
+
+        // const base11 = getAct(10) || getAct(9) || getAct(8);
+        // if (base11 && hasInner) plans[11] = addWorkdays(base11, 1);
+
+        const innercase1 = isTopBottom && hasInner;
+        const innercase2 = isMagnetic && hasInner && I === 'Screen print';
+        const innercase3 = isMagnetic && hasInner && isOffsetFoil;
+
+        if (innercase1) {
+            plans[11] = addWorkdays(getAct(8), 1);
+        } else if (innercase2) {
+            plans[11] = addWorkdays(getAct(12), 1);
+        } else if (innercase3) {
+            plans[11] = addWorkdays(getAct(9), 1);
+        }
+
+
+        // Step12 - Screen Printing
+
+        let targetDate12 = null;
+
+        if (hasReadystock && I === 'Screen print') targetDate12 = getAct(2);
+        else if (isPaperBag && isScreenPrint) targetDate12 = getAct(8);
+        else if ((isMagnetic || isSlidingHandle) && I === 'Screen print') targetDate12 = getAct(9);
+        else if ((isMagnetic && hasInner) && I === 'Screen print') targetDate12 = getAct(9);
+        else if ((isTopBottom && hasInner) && I === 'Screen print') targetDate12 = getAct(10);
+        else if ((isTopBottom || isSlidingBox) && I === 'Screen print') targetDate12 = getAct(10);
+        if (targetDate12) plans[12] = addWorkdays(targetDate12, 1);
+
+
+
+
+        const isboxtypecon = (F === 'Cards' || F === 'Hooks');
+        // const base13 = getAct(12) || getAct(11) || getAct(10);
+        if (hasReadystock && I === 'No') plans[13] = addWorkdays(getAct(2), 1);
+        else if (isboxtypecon) plans[13] = addWorkdays(getAct(2), 1);
+        else if (F === 'Foam' && getAct(5)) plans[13] = addWorkdays(getAct(5), 1);
+        else if (F === 'Paper Box' && getAct(8)) plans[13] = addWorkdays(getAct(8), 1);
+        else if (isPaperBag && isScreenPrint) plans[13] = addWorkdays(getAct(10), 1);
+        else if (isPaperBag && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
+        else if (isMagnetic && hasInner && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
+        else if ((isMagnetic || isSlidingHandle) && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
+        else if ((isMagnetic || isSlidingHandle) && isScreenPrint) plans[13] = addWorkdays(getAct(10), 1);
+        else if (isTopBottom && hasInner && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
+        else if (isTopBottom && hasInner && isScreenPrint) plans[13] = addWorkdays(getAct(12), 1);
+        else if ((isTopBottom || isSlidingBox) && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
+        else if ((isTopBottom || isSlidingBox) && isScreenPrint) plans[13] = addWorkdays(getAct(12), 1);
+
+
+
+
+
+
+        if (getAct(13)) plans[14] = addWorkdays(getAct(13), 1);
+        if (getAct(14)) plans[15] = addWorkdays(getAct(14), 1);
+
+        if (N) plans[16] = N;
 
         // 3. GENERATE UPDATE DATA
         for (let s = 1; s <= 16; s++) {
@@ -1025,7 +1077,7 @@ app.post('/fms/restore-logs', upload.single('file'), async (req, res) => {
                         updateRows.push([
                             jobId,
                             parseInt(row.step_id),
-                            formattedDate, 
+                            formattedDate,
                             row.delay_hours || 0,
                             row.delay_reason || '',
                             row.contractor_printer || row['Contractor/Printer'] || '',
@@ -1050,7 +1102,7 @@ app.post('/fms/restore-logs', upload.single('file'), async (req, res) => {
 
                     // 2. TRIGGER THE RECALCULATION
                     // This function now uses those Actual Dates to build the correct Plan Dates
-                    await performFmsSync(); 
+                    await performFmsSync();
 
                     fs.unlinkSync(req.file.path);
                     res.json({ message: `Success: Restored ${updateRows.length} entries and recalculated Plan Dates for all steps.` });
@@ -1069,7 +1121,7 @@ app.get('/fms/download-sample-csv', (req, res) => {
     const headers = "job_number,step_id,actual_date,delay_hours,delay_reason,contractor_printer,quantity,status\n";
     // Now showing the exact format: YYYY-MM-DD HH:mm:ss
     const sampleRow = "14503,8,2026-02-23 15:38:46,2,Machine Down,Shahjad ji,500,Completed";
-    
+
     const csvContent = headers + sampleRow;
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', 'attachment; filename=fms_restore_sample.csv');
@@ -1079,10 +1131,10 @@ app.get('/fms/download-sample-csv', (req, res) => {
 app.post('/fms/pc-summary', async (req, res) => {
     try {
         const { clients, steps, jobNumbers, statuses } = req.body;
-        
+
         // 1. New params array (No dates needed now)
         let params = [];
-        
+
         // 2. Base WHERE clause: Shows everything where plan exists but actual is blank
         let whereClause = "WHERE t.plan_date IS NOT NULL AND (t.actual_date IS NULL OR t.actual_date = '')";
 
@@ -1112,7 +1164,7 @@ app.post('/fms/pc-summary', async (req, res) => {
             ORDER BY t.plan_date ASC`;
 
         const [rows] = await db.query(sql, params);
-        
+
         // 4. Status Filtering
         const filteredRows = rows.filter(row => {
             const isPast = dayjs().isAfter(dayjs(row.plan_date));
@@ -1179,7 +1231,7 @@ app.get('/fms/logs', async (req, res) => {
 app.put('/fms/update-actual', async (req, res) => {
     const { id, actual_date } = req.body;
     try {
-        await db.query("UPDATE fms_dibiaa_tasks SET actual_date = ?, status = ? WHERE id = ?", 
+        await db.query("UPDATE fms_dibiaa_tasks SET actual_date = ?, status = ? WHERE id = ?",
             [actual_date || null, actual_date ? 'Completed' : 'Pending', id]);
         res.json({ message: "Updated Successfully" });
     } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1194,7 +1246,7 @@ app.put('/checklist/transfer', async (req, res) => {
         const new_name = u.length > 0 ? u[0].name : new_email;
 
         await db.query(
-            "UPDATE checklist_tasks SET employee_email = ?, employee_name = ?, target_date = ? WHERE id = ?", 
+            "UPDATE checklist_tasks SET employee_email = ?, employee_name = ?, target_date = ? WHERE id = ?",
             [new_email, new_name, new_date, id]
         );
         res.json({ message: "Task Transferred Successfully" });
@@ -1211,7 +1263,7 @@ app.get('/checklist/comments/:id', async (req, res) => {
         FROM checklist_comments 
         WHERE checklist_id = ? 
         ORDER BY created_at DESC`;
-    
+
     const [r] = await db.query(sql, [req.params.id]);
     res.json(r);
 });
@@ -1235,7 +1287,7 @@ app.put('/checklist/bulk-transfer', async (req, res) => {
             UPDATE checklist_tasks 
             SET employee_email = ?, employee_name = ?, target_date = ? 
             WHERE employee_email = ? AND target_date = ? AND status = 'Pending'`;
-            
+
         const [result] = await db.query(sql, [new_email, new_name, new_date, current_email, current_date]);
         res.json({ message: `Successfully transferred ${result.affectedRows} tasks.` });
     } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1248,10 +1300,10 @@ app.delete('/checklist/bulk-delete', async (req, res) => {
         // This query is safe because it only targets 'Pending' status
         const sql = "DELETE FROM checklist_tasks WHERE employee_email = ? AND target_date = ? AND status = 'Pending'";
         const [result] = await db.query(sql, [employee_email, target_date]);
-        
+
         res.json({ message: `Deleted ${result.affectedRows} tasks.` });
-    } catch (e) { 
-        res.status(500).json({ error: e.message }); 
+    } catch (e) {
+        res.status(500).json({ error: e.message });
     }
 });
 
@@ -1294,20 +1346,20 @@ app.get('/mis/checklist-tasks', async (req, res) => {
 });
 
 app.get('/fms/dibiaa-config', async (req, res) => { const [r] = await db.query("SELECT * FROM fms_dibiaa_steps_config"); res.json(r); });
-app.post('/fms/dibiaa-config', async (req, res) => { const { step_id, doer_emails, visible_columns } = req.body; await db.query("UPDATE fms_dibiaa_steps_config SET doer_emails=?, visible_columns=? WHERE step_id=?", [doer_emails, visible_columns, step_id]); res.json({message: "Saved"}); });
+app.post('/fms/dibiaa-config', async (req, res) => { const { step_id, doer_emails, visible_columns } = req.body; await db.query("UPDATE fms_dibiaa_steps_config SET doer_emails=?, visible_columns=? WHERE step_id=?", [doer_emails, visible_columns, step_id]); res.json({ message: "Saved" }); });
 
 // --- DEPLOYMENT CONFIG (VERCEL) ---
 app.use(express.static(path.join(__dirname, 'build')));
 app.get(/.*/, (req, res) => {
-  res.sendFile(path.join(__dirname, 'build', 'index.html'));
+    res.sendFile(path.join(__dirname, 'build', 'index.html'));
 });
 
 // --- SERVER STARTUP ---
 const PORT = process.env.PORT || 8800;
 if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-  });
+    app.listen(PORT, () => {
+        console.log(`Server running on port ${PORT}`);
+    });
 }
 
 module.exports = app;
