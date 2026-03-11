@@ -550,7 +550,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             }
 
             // step 8 - full kitting
-            if (I === 'Foil Print' && F === 'Paper Bag' && getAct(6)) {
+            if (F === 'Paper Bag' && I === 'Foil Print' && getAct(6)) {
                 plans[8] = addWorkdays(getAct(6), 3);
             }
             else if (getAct(7)) { plans[8] = addWorkdays(getAct(7), 1); }
