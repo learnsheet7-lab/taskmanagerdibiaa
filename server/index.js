@@ -553,10 +553,14 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             }
 
             // step 8 - full kitting
-            if (F === 'Paper Bag' && I === 'Foil Print' && getAct(6)) {
-                plans[8] = addWorkdays(getAct(6), 3);
+            if (F !== 'PVC Pad') {
+                if (F === 'Paper Bag' && I === 'Foil Print' && getAct(6)) {
+                    plans[8] = addWorkdays(getAct(6), 3);
+                }
+                else if (F !== 'Paper Bag' && I !== 'Foil Print' && getAct(7)) {
+                    plans[8] = addWorkdays(getAct(7), 1);
+                }
             }
-            else if (F !== 'Paper Bag' && I !== 'Foil Print' && getAct(7)) { plans[8] = addWorkdays(getAct(7), 1); }
 
             // if (getAct(8)) {
             //     const condition = (G === 'Magnetic' || (G || '').startsWith('Sliding Handle') && I === 'Screen print') || (G === 'Magnetic' && isOffsetFoil && hasInner) || (G === 'Magnetic' && hasInner && I === 'Screen print');
@@ -619,6 +623,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             let targetDate12 = null;
 
             if (hasReadystock && I === 'Screen print') targetDate12 = getAct(2);
+            else if (F === 'PVC Pad') targetDate12 = getAct(7);
             else if (isPaperBag && isScreenPrint) targetDate12 = getAct(8);
             else if ((isMagnetic || isSlidingHandle) && I === 'Screen print') targetDate12 = getAct(9);
             else if ((isMagnetic && hasInner) && I === 'Screen print') targetDate12 = getAct(9);
