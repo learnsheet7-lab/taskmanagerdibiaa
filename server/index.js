@@ -536,16 +536,16 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
 
 
             // step7 - die cutting
-            if (F === 'Paper Box' && getAct(2)) {
+            if (F === 'PVC Pad' && getAct(11)) {
+                plans[7] = addWorkdays(getAct(11), 3);
+            } 
+            else if (F === 'Paper Box' && getAct(2)) {
                 plans[7] = addWorkdays(getAct(2), 3);
             }else if (I === 'Foil Print' && F === 'Paper Bag' && getAct(3)) {
                 plans[7] = addWorkdays(getAct(3), 3);
             }
             else if (I !== 'Foil Print' && getAct(3)) {
                 plans[7] = addWorkdays(getAct(3), 3);
-            }
-            else if (F === 'PVC Pad' && getAct(11)) {
-                plans[7] = addWorkdays(getAct(11), 3);
             } 
             else if (getAct(6)) {
                 plans[7] = addWorkdays(getAct(6), 3);
