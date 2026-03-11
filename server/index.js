@@ -633,8 +633,8 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             else if ((isMagnetic || isSlidingHandle) && isScreenPrint) plans[13] = addWorkdays(getAct(10), 1);    
             else if (isTopBottom && hasInner && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);    
             else if (isTopBottom && hasInner && isScreenPrint) plans[13] = addWorkdays(getAct(12), 1);    
-            else if ((isTopBottom || isSlidingHandle) && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);    
-            else if ((isTopBottom || isSlidingHandle)  && isScreenPrint) plans[13] = addWorkdays(getAct(12), 1);    
+            else if ((isTopBottom || isSlidingBox) && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);    
+            else if ((isTopBottom || isSlidingBox)  && isScreenPrint) plans[13] = addWorkdays(getAct(12), 1);    
             
 
 
@@ -927,7 +927,9 @@ const performFmsSync = async () => {
             }
 
             const isTopBottom = G === 'Top-Bottom'; const isSlidingBox = G === 'Sliding Box'; const isMagnetic = G === 'Magnetic';
-            const isSlidingHandle = G === 'Sliding Handle Box'; const isPaperBag = F === 'Paper Bag';
+            const isSlidingHandle = G === 'Sliding Handle Box'; 
+            
+            const isPaperBag = F === 'Paper Bag';
 
             let targetDate10 = null;
             if (isPaperBag && isScreenPrint) targetDate10 = getAct(12);
