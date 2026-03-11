@@ -886,9 +886,11 @@ const performFmsSync = async () => {
         const getAct = (s) => taskMap[`${jobId}_${s}`]?.actual || null;
 
         const A = parseDate(r[0]); const B = r[1]; const F = r[5]; const G = r[6]; const I = r[8]; const K = r[10]; const N = parseDate(r[13]);
-        const hasInner = (K || '').toLowerCase().includes('inner');
-        const isOffsetFoil = (I === 'Offset Print' || I === 'Foil Print' || I === 'No');
-        const isScreenPrint = (I === 'Screen print');
+        const hasInner = K && K.toLowerCase().includes('inner print') || K.toLowerCase().includes('inner screen print');
+            const hasReadystock = K && K.toLowerCase().includes('ready stock') || K.toLowerCase().includes('ready to stock');
+            
+            const isOffsetFoil = (I === 'Offset Print' || I === 'Foil Print' || I === 'No');
+            const isScreenPrint = (I === 'Screen print');
 
         let plans = {};
 
