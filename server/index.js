@@ -523,7 +523,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
 
 
 
-            if (!(F === 'Paper Bag' || F === 'Paper Box' || (F || '').endsWith('Tray'))) {
+            if (!(F === 'Paper Bag' || F === 'Paper Box' || F === 'PVC Pad' || (F || '').endsWith('Tray'))) {
                 if (getAct(2)) plans[5] = addWorkdays(getAct(2), 4);
             }
 
