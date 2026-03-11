@@ -508,7 +508,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             }
             //step2
 
-            if (!(F === 'Paper Box')) {
+            if (!(F === 'Paper Box' || F === 'Foam' )) {
                 if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1);  //step3
             }
 
@@ -529,21 +529,21 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
 
 
             // step6-foiling
-            if (I === 'Foil Print' && F === 'Paper Bag' && getAct(7)) {
+            if (F === 'Paper Bag' && I === 'Foil Print' && getAct(7)) {
                 plans[6] = addWorkdays(getAct(7), 3);
             }
-            else if (I === 'Foil Print' && getAct(3)) { plans[6] = addWorkdays(getAct(3), 3); }
+            else if (F !== 'Paper Bag' && I === 'Foil Print' && getAct(3)) { plans[6] = addWorkdays(getAct(3), 3); }
 
 
             // step7 - die cutting
             if (F === 'Paper Box' && getAct(2)) {
                 plans[7] = addWorkdays(getAct(2), 3);
+            }else if (I === 'Foil Print' && F === 'Paper Bag' && getAct(3)) {
+                plans[7] = addWorkdays(getAct(3), 3);
             }
             else if (I !== 'Foil Print' && getAct(3)) {
                 plans[7] = addWorkdays(getAct(3), 3);
-            } else if (I === 'Foil Print' && F === 'Paper Bag' && getAct(3)) {
-                plans[7] = addWorkdays(getAct(3), 3);
-            }
+            } 
             else if (getAct(6)) {
                 plans[7] = addWorkdays(getAct(6), 3);
 
