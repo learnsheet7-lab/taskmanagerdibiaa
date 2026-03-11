@@ -646,6 +646,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             else if ((isMagnetic || isSlidingHandle) && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
             else if ((isMagnetic || isSlidingHandle) && isScreenPrint) plans[13] = addWorkdays(getAct(10), 1);
             else if (isTopBottom && hasInner && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
+            else if (F === 'PVC Pad' && getAct(12)) plans[13] = addWorkdays(getAct(12), 1);
             else if (isTopBottom && hasInner && isScreenPrint) plans[13] = addWorkdays(getAct(12), 1);
             else if ((isTopBottom || isSlidingBox) && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
             else if ((isTopBottom || isSlidingBox) && isScreenPrint) plans[13] = addWorkdays(getAct(12), 1);
