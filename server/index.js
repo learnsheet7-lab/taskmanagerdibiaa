@@ -508,10 +508,12 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
                 plans[2] = addWorkdays(getAct(4), 1);
             }
             //step2
-
+            if(!hasReadystock){
             if (!(F === 'Paper Box' || F === 'Foam' )) {
                 if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1);  //step3
             }
+        }
+        
 
             // const step1Act = getAct(1);
             // if ((B === 'OTD' || B === 'Jewellery (OTD)') && step1Act) {
@@ -523,20 +525,23 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             // }
 
 
-
+            if(!hasReadystock){
             if (!(F === 'Paper Bag' || F === 'Paper Box' || F === 'PVC Pad' || (F || '').endsWith('Tray'))) {
                 if (getAct(2)) plans[5] = addWorkdays(getAct(2), 4);
             }
+        }
 
 
             // step6-foiling
+            if(!hasReadystock){
             if (F === 'Paper Bag' && I === 'Foil Print' && getAct(7)) {
                 plans[6] = addWorkdays(getAct(7), 3);
             }
             else if (F !== 'Paper Bag' && I === 'Foil Print' && getAct(3)) { plans[6] = addWorkdays(getAct(3), 3); }
-
+        }
 
             // step7 - die cutting
+            if(!hasReadystock){
             if (F === 'PVC Pad' && getAct(11)) {
                 plans[7] = addWorkdays(getAct(11), 3);
             } 
@@ -552,8 +557,10 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
                 plans[7] = addWorkdays(getAct(6), 3);
 
             }
+        }
 
             // step 8 - full kitting
+            if(!hasReadystock){
             if (F !== 'PVC Pad') {
                 if (F === 'Paper Bag' && I === 'Foil Print' && getAct(6)) {
                     plans[8] = addWorkdays(getAct(6), 3);
@@ -562,6 +569,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
                     plans[8] = addWorkdays(getAct(7), 1);
                 }
             }
+        }
 
             // if (getAct(8)) {
             //     const condition = (G === 'Magnetic' || (G || '').startsWith('Sliding Handle') && I === 'Screen print') || (G === 'Magnetic' && isOffsetFoil && hasInner) || (G === 'Magnetic' && hasInner && I === 'Screen print');
