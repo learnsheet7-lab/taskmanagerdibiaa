@@ -543,6 +543,9 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             }
             else if (I !== 'Foil Print' && getAct(3)) {
                 plans[7] = addWorkdays(getAct(3), 3);
+            }
+            else if (F !== 'PVC Pad' && getAct(12)) {
+                plans[7] = addWorkdays(getAct(12), 3);
             } 
             else if (getAct(6)) {
                 plans[7] = addWorkdays(getAct(6), 3);
@@ -596,8 +599,13 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             const innercase1 = isTopBottom && hasInner;
             const innercase2 = isMagnetic && hasInner && I === 'Screen print';
             const innercase3 = isMagnetic && hasInner && isOffsetFoil;
+            const innercase4 = F==='PVC Pad';
 
-            if (innercase1) {
+
+            if (innercase4) {
+                plans[11] = addWorkdays(getAct(3), 1);
+            } 
+            else if (innercase1) {
                 plans[11] = addWorkdays(getAct(8), 1);
             } else if (innercase2) {
                 plans[11] = addWorkdays(getAct(12), 1);
