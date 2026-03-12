@@ -565,6 +565,9 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
                 if (F === 'Paper Bag' && I === 'Foil Print' && getAct(6)) {
                     plans[8] = addWorkdays(getAct(6), 3);
                 }
+                else if (F === 'Paper Bag' && I !== 'Foil Print' && getAct(7)) {
+                    plans[8] = addWorkdays(getAct(7), 1);
+                }
                 else if (F !== 'Paper Bag' && I !== 'Foil Print' && getAct(7)) {
                     plans[8] = addWorkdays(getAct(7), 1);
                 }
