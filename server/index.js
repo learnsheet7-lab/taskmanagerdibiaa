@@ -597,7 +597,8 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             const isPaperBag = F === 'Paper Bag';
 
             let targetDate10 = null;
-            if (isPaperBag && isScreenPrint) targetDate10 = getAct(12);
+            if (F === 'Paper Box' && getAct(8)) targetDate10 = getAct(8);
+            else if (isPaperBag && isScreenPrint) targetDate10 = getAct(12);
             else if (isPaperBag && isOffsetFoil) targetDate10 = getAct(8);
             else if (isMagnetic && hasInner) targetDate10 = getAct(11);
             else if ((isMagnetic || isSlidingHandle) && isOffsetFoil) targetDate10 = getAct(8);
@@ -648,7 +649,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             if (hasReadystock && I === 'No') plans[13] = addWorkdays(getAct(2), 1);
             else if (isboxtypecon) plans[13] = addWorkdays(getAct(2), 1);
             else if (F === 'Foam' && getAct(5)) plans[13] = addWorkdays(getAct(5), 1);
-            else if (F === 'Paper Box' && getAct(8)) plans[13] = addWorkdays(getAct(8), 1);
+            else if (F === 'Paper Box' && getAct(10)) plans[13] = addWorkdays(getAct(10), 1);
             else if (isPaperBag && isScreenPrint) plans[13] = addWorkdays(getAct(10), 1);
             else if (isPaperBag && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
             else if (isMagnetic && hasInner && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
@@ -994,8 +995,9 @@ const performFmsSync = async () => {
             const isSlidingHandle = G === 'Sliding Handle Box';
             const isPaperBag = F === 'Paper Bag';
 
-            let targetDate10 = null;
-            if (isPaperBag && isScreenPrint) targetDate10 = getAct(12);
+             let targetDate10 = null;
+            if (F === 'Paper Box' && getAct(8)) targetDate10 = getAct(8);
+            else if (isPaperBag && isScreenPrint) targetDate10 = getAct(12);
             else if (isPaperBag && isOffsetFoil) targetDate10 = getAct(8);
             else if (isMagnetic && hasInner) targetDate10 = getAct(11);
             else if ((isMagnetic || isSlidingHandle) && isOffsetFoil) targetDate10 = getAct(8);
@@ -1046,7 +1048,7 @@ const performFmsSync = async () => {
             if (hasReadystock && I === 'No') plans[13] = addWorkdays(getAct(2), 1);
             else if (isboxtypecon) plans[13] = addWorkdays(getAct(2), 1);
             else if (F === 'Foam' && getAct(5)) plans[13] = addWorkdays(getAct(5), 1);
-            else if (F === 'Paper Box' && getAct(8)) plans[13] = addWorkdays(getAct(8), 1);
+            else if (F === 'Paper Box' && getAct(10)) plans[13] = addWorkdays(getAct(10), 1);
             else if (isPaperBag && isScreenPrint) plans[13] = addWorkdays(getAct(10), 1);
             else if (isPaperBag && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
             else if (isMagnetic && hasInner && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
