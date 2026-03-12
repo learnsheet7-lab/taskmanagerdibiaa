@@ -561,7 +561,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
 
             // step 8 - full kitting
         
-            if (F !== 'PVC Pad' || !hasReadystock) {
+            if (F !== 'PVC Pad') {
                 if (F === 'Paper Bag' && I === 'Foil Print' && getAct(6)) {
                     plans[8] = addWorkdays(getAct(6), 3);
                 }
@@ -960,7 +960,7 @@ const performFmsSync = async () => {
 
             // step 8 - full kitting
           
-            if (F !== 'PVC Pad' || !hasReadystock) {
+            if (F !== 'PVC Pad') {
                 if (F === 'Paper Bag' && I === 'Foil Print' && getAct(6)) {
                     plans[8] = addWorkdays(getAct(6), 3);
                 }
