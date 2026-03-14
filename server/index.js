@@ -272,7 +272,51 @@ app.put('/checklist/complete', async (req, res) => { await db.query("UPDATE chec
 app.post('/tasks', async (req, res) => { await db.query("INSERT INTO tasks (task_uid,employee_name,assigned_to_email,approver_email,description,target_date,priority,approval_needed,assigned_by,remarks,status,previous_status) VALUES (?,?,?,?,?,?,?,?,?,?,'Pending','Pending')", ['T-' + Math.floor(Math.random() * 9000), req.body.employee_name, req.body.email, req.body.approver_email, req.body.description, req.body.target_date, req.body.priority, req.body.approval_needed, req.body.assigned_by || 'System', req.body.remarks || '']); res.json({ message: "Delegated" }); });
 app.get('/tasks/:email/:role', async (req, res) => { const q = req.params.role === 'Admin' ? "SELECT * FROM tasks ORDER BY created_at DESC" : "SELECT * FROM tasks WHERE assigned_to_email=? ORDER BY created_at DESC"; const [r] = await db.query(q, [req.params.email]); res.json(r); });
 app.delete('/tasks/:id', async (req, res) => { await db.query("DELETE FROM tasks WHERE id=?", [req.params.id]); res.json({ message: "Deleted" }); });
-app.put('/tasks/update-status', async (req, res) => { const { id, status, revised_date, remarks, is_rejection } = req.body; if (is_rejection) await db.query("UPDATE tasks SET status = CASE WHEN previous_status IS NULL OR previous_status='' OR previous_status='Waiting Approval' THEN 'Pending' ELSE previous_status END WHERE id=?", [id]); else if (status === 'Revision Requested') await db.query("UPDATE tasks SET previous_status=status, status=?, revised_date_request=?, revision_remarks=? WHERE id=?", [status, revised_date, remarks, id]); else if (status === 'Revised') await db.query("UPDATE tasks SET status='Revised', target_date=revised_date_request WHERE id=?", [id]); else await db.query("UPDATE tasks SET previous_status=status, status=? WHERE id=?", [status, id]); res.json({ message: "Updated" }); });
+app.put('/tasks/update-status', async (req, res) => {
+    const { id, status, revised_date, remarks, is_rejection } = req.body;
+
+    try {
+        if (is_rejection) {
+            // If rejected, revert to previous status and clear completed_at just in case
+            await db.query(
+                `UPDATE tasks SET 
+                    status = CASE WHEN previous_status IS NULL OR previous_status='' OR previous_status='Waiting Approval' THEN 'Pending' ELSE previous_status END,
+                    completed_at = NULL 
+                 WHERE id=?`, 
+                [id]
+            );
+        } 
+        else if (status === 'Revision Requested') {
+            await db.query(
+                "UPDATE tasks SET previous_status=status, status=?, revised_date_request=?, revision_remarks=? WHERE id=?", 
+                [status, revised_date, remarks, id]
+            );
+        } 
+        else if (status === 'Revised') {
+            await db.query(
+                "UPDATE tasks SET status='Revised', target_date=revised_date_request WHERE id=?", 
+                [id]
+            );
+        } 
+        else {
+            // STANDARD STATUS UPDATE (Handles 'Completed' and others)
+            // We use CASE to set completed_at only if the status is being set to 'Completed'
+            await db.query(
+                `UPDATE tasks SET 
+                    previous_status = status, 
+                    status = ?, 
+                    completed_at = CASE WHEN ? = 'Completed' THEN NOW() ELSE NULL END 
+                 WHERE id = ?`, 
+                [status, status, id]
+            );
+        }
+
+        res.json({ message: "Updated" });
+    } catch (error) {
+        console.error("Update Status Error:", error);
+        res.status(500).json({ message: "Internal Server Error" });
+    }
+});
 app.put('/tasks/edit/:id', async (req, res) => { const { description, target_date, priority, approval_needed, remarks, assigned_to_email, approver_email, employee_name } = req.body; await db.query("UPDATE tasks SET description=?, target_date=?, priority=?, approval_needed=?, remarks=?, assigned_to_email=?, approver_email=?, employee_name=? WHERE id=?", [description, target_date, priority, approval_needed, remarks, assigned_to_email, approver_email, employee_name, req.params.id]); res.json({ message: "Task Updated" }); });
 app.get('/comments/:taskId', async (req, res) => { const [r] = await db.query("SELECT id,task_id,user_name,comment,DATE_FORMAT(created_at,'%d/%m/%Y %H:%i:%s') as formatted_date FROM task_comments WHERE task_id=? ORDER BY created_at DESC", [req.params.taskId]); res.json(r); });
 app.post('/comments', async (req, res) => { await db.query("INSERT INTO task_comments (task_id,user_name,comment) VALUES (?,?,?)", [req.body.task_id, req.body.user_name, req.body.comment]); res.json({ message: "Added" }); });
