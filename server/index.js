@@ -1429,15 +1429,13 @@ app.delete('/checklist/bulk-delete', async (req, res) => {
 // 3. Reset Job Logic
 app.post('/fms/reset-job', async (req, res) => {
     const { job_number, reset_to_step_id } = req.body;
-
     try {
-        // 1. Get the internal job_id
         const [job] = await db.query("SELECT job_id FROM fms_dibiaa_raw WHERE job_number = ?", [job_number]);
         if (job.length === 0) return res.status(404).json({ message: "Job Number not found" });
         const jobId = job[0].job_id;
 
-        // 2. Clear actual_date for the reset step and ALL steps after it
-        // This makes 'getAct(step)' return null in your logic loop
+        // Reset the actual dates. This makes them "Pending" and 
+        // breaks the 'getAct' chain in your logic.
         await db.query(`
             UPDATE fms_dibiaa_tasks 
             SET actual_date = NULL, status = 'Pending' 
@@ -1445,7 +1443,7 @@ app.post('/fms/reset-job', async (req, res) => {
             [jobId, reset_to_step_id]
         );
 
-        res.json({ message: "Job actuals cleared. Re-syncing logic..." });
+        res.json({ message: "Success" });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
