@@ -745,18 +745,16 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
         if (taskUpdates.length > 0) {
             const taskSql = `
         INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) 
-        VALUES ? 
-        ON DUPLICATE KEY UPDATE 
-        plan_date = CASE 
-            -- 1. If the existing plan is blank, UPDATE IT with the new calculation
-            WHEN plan_date IS NULL OR plan_date = '' THEN VALUES(plan_date)
-            
-            -- 2. If it's already completed, KEEP the old plan date
-            WHEN status = 'Completed' THEN plan_date
-            
-            -- 3. Otherwise, UPDATE to the new calculated plan date
-            ELSE VALUES(plan_date)
-        END`;
+    VALUES ? 
+    ON DUPLICATE KEY UPDATE 
+    plan_date = CASE 
+        -- If it's still 'Completed', keep the historical plan_date
+        WHEN status = 'Completed' THEN plan_date
+        
+        -- If it's 'Pending' (which happens after our Reset), 
+        -- allow the new calculation from addWorkdays() to overwrite it
+        ELSE VALUES(plan_date) 
+    END`;
 
             await db.query(taskSql, [taskUpdates]);
         }
@@ -765,6 +763,29 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
 
     } catch (e) {
         console.error("Sync Error:", e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/fms/reset-production-logic', async (req, res) => {
+    const { job_id, reset_to_step_id } = req.body;
+
+    try {
+        // 1. Clear actual_date for the reset step and all steps AFTER it.
+        // This makes them "Pending" again in the eyes of your sync logic.
+        await db.query(`
+            UPDATE fms_dibiaa_tasks 
+            SET actual_date = NULL, status = 'Pending' 
+            WHERE job_id = ? AND step_id >= ?`, 
+            [job_id, reset_to_step_id]
+        );
+
+        // 2. IMPORTANT: We do NOT reset steps 1, 2, or 3 if we reset to step 4,
+        // because your logic shows Step 4 is the trigger. 
+        // Once Step 4 is "Done" again, the Sync will re-run your addWorkdays() chain.
+
+        res.json({ message: "Job reset successfully. Running re-sync..." });
+    } catch (e) {
         res.status(500).json({ error: e.message });
     }
 });
@@ -1408,29 +1429,29 @@ app.delete('/checklist/bulk-delete', async (req, res) => {
 // 3. Reset Job Logic
 app.post('/fms/reset-job', async (req, res) => {
     const { job_number, reset_to_step_id } = req.body;
+
     try {
+        // Find the job_id from the job_number first
         const [job] = await db.query("SELECT job_id FROM fms_dibiaa_raw WHERE job_number = ?", [job_number]);
-        if (job.length === 0) return res.status(404).json({ message: "Job Not Found" });
+        if (job.length === 0) return res.status(404).json({ message: "Job Number not found" });
+
         const jobId = job[0].job_id;
 
-        // Reset Logic: Delete tasks between (Selected Step + 1) and Step 15
-        // We keep Step 16 (Dispatch) and anything before the reset step
-        await db.query(`
-            DELETE FROM fms_dibiaa_tasks 
-            WHERE job_id = ? 
-            AND step_id > ? 
-            AND step_id <= 15`, [jobId, reset_to_step_id]);
-
-        // Mark the 'Reset To' step as Pending (remove its actual date)
+        // 1. Clear actual_date for the reset step and all steps AFTER it.
+        // This follows your logic: the job is now "back" at this step.
         await db.query(`
             UPDATE fms_dibiaa_tasks 
             SET actual_date = NULL, status = 'Pending' 
-            WHERE job_id = ? AND step_id = ?`, [jobId, reset_to_step_id]);
+            WHERE job_id = ? AND step_id >= ?`, 
+            [jobId, reset_to_step_id]
+        );
 
-        res.json({ message: "Job Reset Successfully" });
-    } catch (e) { res.status(500).json({ error: e.message }); }
+        res.json({ message: "Database Cleared" });
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ error: e.message });
+    }
 });
-
 // Endpoint for Checklist Detail Popup
 app.get('/mis/checklist-tasks', async (req, res) => {
     const { email, start, end } = req.query;
