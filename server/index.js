@@ -748,12 +748,17 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
     VALUES ? 
     ON DUPLICATE KEY UPDATE 
     plan_date = CASE 
-        -- If it's still completed, don't change the historical plan date
+        -- 1. If the task in the DB is ALREADY 'Completed', keep its original plan_date.
         WHEN status = 'Completed' THEN plan_date 
         
-        -- BUT if it was reset (now 'Pending'), take the NEW calculation 
-        -- from your addWorkdays() logic
+        -- 2. If it is NOT completed (meaning it was just reset to 'Pending'), 
+        -- overwrite it with the NEW calculation from your logic loop.
         ELSE VALUES(plan_date) 
+    END,
+    -- Also ensure the status is updated to Pending if it was previously something else
+    status = CASE 
+        WHEN status = 'Completed' THEN 'Completed' 
+        ELSE VALUES(status) 
     END`;
 
             await db.query(taskSql, [taskUpdates]);
