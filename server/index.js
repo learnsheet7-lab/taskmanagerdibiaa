@@ -744,15 +744,15 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
 
         if (taskUpdates.length > 0) {
             const taskSql = `
-        INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) 
+    INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) 
     VALUES ? 
     ON DUPLICATE KEY UPDATE 
     plan_date = CASE 
-        -- If it's still 'Completed', keep the historical plan_date
-        WHEN status = 'Completed' THEN plan_date
+        -- If it's still completed, don't change the historical plan date
+        WHEN status = 'Completed' THEN plan_date 
         
-        -- If it's 'Pending' (which happens after our Reset), 
-        -- allow the new calculation from addWorkdays() to overwrite it
+        -- BUT if it was reset (now 'Pending'), take the NEW calculation 
+        -- from your addWorkdays() logic
         ELSE VALUES(plan_date) 
     END`;
 
@@ -1431,27 +1431,27 @@ app.post('/fms/reset-job', async (req, res) => {
     const { job_number, reset_to_step_id } = req.body;
 
     try {
-        // Find the job_id from the job_number first
+        // 1. Get the internal job_id
         const [job] = await db.query("SELECT job_id FROM fms_dibiaa_raw WHERE job_number = ?", [job_number]);
         if (job.length === 0) return res.status(404).json({ message: "Job Number not found" });
-
         const jobId = job[0].job_id;
 
-        // 1. Clear actual_date for the reset step and all steps AFTER it.
-        // This follows your logic: the job is now "back" at this step.
+        // 2. Clear actual_date for the reset step and ALL steps after it
+        // This makes 'getAct(step)' return null in your logic loop
         await db.query(`
             UPDATE fms_dibiaa_tasks 
             SET actual_date = NULL, status = 'Pending' 
-            WHERE job_id = ? AND step_id >= ?`, 
+            WHERE job_id = ? AND step_id >= ? AND step_id != 16`, 
             [jobId, reset_to_step_id]
         );
 
-        res.json({ message: "Database Cleared" });
+        res.json({ message: "Job actuals cleared. Re-syncing logic..." });
     } catch (e) {
-        console.error(e);
         res.status(500).json({ error: e.message });
     }
 });
+
+
 // Endpoint for Checklist Detail Popup
 app.get('/mis/checklist-tasks', async (req, res) => {
     const { email, start, end } = req.query;
