@@ -232,6 +232,7 @@ app.post('/checklist', async (req, res) => {
 
         if (frequency === 'Daily') current = current.add(1, 'day');
         else if (frequency === 'Weekly') current = current.add(1, 'week');
+        else if (frequency === 'Alternative Week') current = current.add(2, 'week');
         else if (frequency === 'Monthly') current = current.add(1, 'month');
         else if (frequency === 'Quarterly') current = current.add(3, 'month');
         else if (frequency === 'Yearly') current = current.add(1, 'year');
