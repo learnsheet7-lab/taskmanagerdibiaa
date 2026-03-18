@@ -1343,7 +1343,7 @@ app.get('/mis/checklist-report', async (req, res) => {
 app.get('/fms/logs', async (req, res) => {
     try {
         const sql = `
-            SELECT t.id, r.job_number, s.step_name, t.plan_date, t.actual_date, t.step_id
+            SELECT t.id, r.job_number,r.quantity, s.step_name, t.plan_date, t.actual_date, t.step_id
             FROM fms_dibiaa_tasks t
             JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
             JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
