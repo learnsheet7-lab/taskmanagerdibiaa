@@ -731,7 +731,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
                 } else {
                     // Logic says task should NOT exist.
                     // SAFETY: Only delete if it exists AND actual_date is NULL (not completed).
-                    if (existsInDB) {
+                    if (existsInDB && !existsInDB.actual) {
                         tasksToDelete.push(existsInDB.id);
                     }
                 }
@@ -1440,16 +1440,16 @@ app.post('/fms/reset-job', async (req, res) => {
         if (job.length === 0) return res.status(404).json({ message: "Job Number not found" });
         const jobId = job[0].job_id;
 
-        // THE FIX: Reset EVERYTHING to Pending/NULL (except Step 16)
-        // This clears the "Completed" status that was bothering you.
+        // THE FIX: Only clear the actual_date for the chosen step and higher.
+        // If you reset to Step 1, Step 4 remains 'Completed' in the DB.
         await db.query(`
             UPDATE fms_dibiaa_tasks 
             SET actual_date = NULL, status = 'Pending' 
-            WHERE job_id = ? AND step_id != 16`, 
-            [jobId]
+            WHERE job_id = ? AND step_id >= ? AND step_id != 16`, 
+            [jobId, reset_to_step_id]
         );
 
-        res.json({ message: "Job state cleared. Ready for logic re-sync." });
+        res.json({ message: "Reset successful" });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
