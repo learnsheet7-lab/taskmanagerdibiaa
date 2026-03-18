@@ -1353,6 +1353,31 @@ app.get('/fms/logs', async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// 1. CLEAR LOG: Sets actual_date to NULL and status back to Pending
+app.put('/fms/clear-log', async (req, res) => {
+    const { id } = req.body;
+    try {
+        await db.query(
+            "UPDATE fms_dibiaa_tasks SET actual_date = NULL, status = 'Pending' WHERE id = ?", 
+            [id]
+        );
+        res.json({ message: "Log cleared successfully" });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 2. DELETE TASK: Completely removes the task from the database
+app.delete('/fms/delete-task/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        await db.query("DELETE FROM fms_dibiaa_tasks WHERE id = ?", [id]);
+        res.json({ message: "Task deleted successfully" });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // 2. Update Actual Date Manually
 app.put('/fms/update-actual', async (req, res) => {
     const { id, actual_date } = req.body;
