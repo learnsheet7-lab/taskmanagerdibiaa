@@ -505,15 +505,15 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
         jobs.forEach(j => jobMap[j.sheet_row_index] = j.job_id);
 
         // Add 'status' to the query
-const [allTasks] = await db.query("SELECT id, job_id, step_id, actual_date, status FROM fms_dibiaa_tasks");
-const taskMap = {};
-allTasks.forEach(t => {
-    taskMap[`${t.job_id}_${t.step_id}`] = {
-        id: t.id,
-        status: t.status, // Store the current status (Hold/Pending/Completed)
-        actual: t.actual_date ? dayjs.tz(t.actual_date, "Asia/Kolkata") : null
-    };
-});
+        const [allTasks] = await db.query("SELECT id, job_id, step_id, actual_date, status FROM fms_dibiaa_tasks");
+        const taskMap = {};
+        allTasks.forEach(t => {
+            taskMap[`${t.job_id}_${t.step_id}`] = {
+                id: t.id,
+                status: t.status, // Store the current status (Hold/Pending/Completed)
+                actual: t.actual_date ? dayjs.tz(t.actual_date, "Asia/Kolkata") : null
+            };
+        });
 
         const taskUpdates = [];
         const tasksToDelete = [];
@@ -617,7 +617,7 @@ allTasks.forEach(t => {
                     }
                     else if (F !== 'Paper Bag' && I !== 'Foil Print' && getAct(7)) {
                         plans[8] = addWorkdays(getAct(7), 1);
-                    }else if (getAct(7)) {
+                    } else if (getAct(7)) {
                         plans[8] = addWorkdays(getAct(7), 1);
                     }
                 }
@@ -725,44 +725,47 @@ allTasks.forEach(t => {
 
             // --- 4. DATA SYNCHRONIZATION WITH "ACTUAL" CHECK ---
             for (let s = 1; s <= 16; s++) {
-    const key = `${jobId}_${s}`;
-    const existingTask = taskMap[key]; // Check what's currently in DB
+                const key = `${jobId}_${s}`;
+                const existingTask = taskMap[key]; // Check what's currently in DB
 
-    if (plans[s]) {
-        const sqlDate = plans[s].format('YYYY-MM-DD HH:mm:ss');
-        
-        // LOGIC: If it already exists in DB and is on 'Hold', keep 'Hold'. 
-        // Otherwise, use 'Pending'.
-        const currentStatus = (existingTask && existingTask.status === 'Hold') ? 'Hold' : 'Pending';
-        
-        taskUpdates.push([jobId, s, sqlDate, currentStatus]);
-    } else {
-        // Safety: Only delete if it exists and hasn't been completed
-        if (existingTask && !existingTask.actual) {
-            tasksToDelete.push(existingTask.id);
-        }
-    }
-}
+                if (plans[s]) {
+                    const sqlDate = plans[s].format('YYYY-MM-DD HH:mm:ss');
+
+                    // LOGIC: If it already exists in DB and is on 'Hold', keep 'Hold'. 
+                    // Otherwise, use 'Pending'.
+                    const currentStatus = (existingTask && existingTask.status === 'Hold') ? 'Hold' : 'Pending';
+
+                    taskUpdates.push([jobId, s, sqlDate, currentStatus]);
+                } else {
+                    // Safety: Only delete if it exists and hasn't been completed
+                    if (existingTask && !existingTask.actual) {
+                        tasksToDelete.push(existingTask.id);
+                    }
+                }
+            }
         }
 
         // 5. EXECUTE DATABASE CHANGES
         // 5. EXECUTE DATABASE CHANGES
-if (tasksToDelete.length > 0) {
-    await db.query("DELETE FROM fms_dibiaa_tasks WHERE id IN (?)", [tasksToDelete]);
-}
+        if (tasksToDelete.length > 0) {
+            await db.query("DELETE FROM fms_dibiaa_tasks WHERE id IN (?)", [tasksToDelete]);
+        }
 
-if (taskUpdates.length > 0) {
-    const taskSql = `
+        if (taskUpdates.length > 0) {
+            const taskSql = `
     INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) 
     VALUES ? 
     ON DUPLICATE KEY UPDATE 
     plan_date = IF(status = 'Completed', plan_date, VALUES(plan_date)),
-    status = IF(status = 'Hold' OR status = 'Completed', status, VALUES(status))`;
+    status = IF(status = 'Hold' OR status = 'Completed', status, VALUES(status)),
+    hold_reason = hold_reason,
+    hold_timestamp = hold_timestamp,
+    unhold_timestamp = unhold_timestamp`;
 
-    await db.query(taskSql, [taskUpdates]);
-}
+            await db.query(taskSql, [taskUpdates]);
+        }
 
-res.json({ message: `Sync Complete. Deleted ${tasksToDelete.length} obsolete tasks.` });
+        res.json({ message: `Sync Complete. Deleted ${tasksToDelete.length} obsolete tasks.` });
 
     } catch (e) {
         console.error("Sync Error:", e);
@@ -939,12 +942,13 @@ const performFmsSync = async () => {
     const jobMap = {};
     jobs.forEach(j => jobMap[j.sheet_row_index] = j.job_id);
 
-    // Fetch tasks to get actual dates
-    const [allTasks] = await db.query("SELECT id, job_id, step_id, actual_date FROM fms_dibiaa_tasks");
+    // --- CRITICAL CHANGE 1: Fetch 'status' in the query ---
+    const [allTasks] = await db.query("SELECT id, job_id, step_id, actual_date, status FROM fms_dibiaa_tasks");
     const taskMap = {};
     allTasks.forEach(t => {
         taskMap[`${t.job_id}_${t.step_id}`] = {
             id: t.id,
+            status: t.status, // Now storing current status
             actual: t.actual_date ? dayjs.tz(t.actual_date, "Asia/Kolkata") : null
         };
     });
@@ -969,106 +973,63 @@ const performFmsSync = async () => {
 
         let plans = {};
 
-        // --- START LOGIC ---
-        if (A) plans[4] = addWorkdays(A, 3);  //step4
-
+        // --- PRODUCTION LOGIC START (Your existing rules) ---
+        if (A) plans[4] = addWorkdays(A, 3);
         const step4Act = getAct(4);
-        if ((B === 'OTD' || B === 'Jewellery (OTD)' && step4Act)) plans[1] = addWorkdays(step4Act, 6); // step1
-
+        if ((B === 'OTD' || B === 'Jewellery (OTD)' && step4Act)) plans[1] = addWorkdays(step4Act, 6);
         if (B === 'OTD' || B === 'Jewellery (OTD)') {
             plans[2] = addWorkdays(getAct(1), 1);
         } else if (getAct(4)) {
             plans[2] = addWorkdays(getAct(4), 1);
         }
-        //step2
         if (!hasReadystock) {
             if (!(F === 'Paper Box' || F === 'Foam')) {
-                if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1);  //step3
+                if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1);
             }
         }
-
-
-        // const step1Act = getAct(1);
-        // if ((B === 'OTD' || B === 'Jewellery (OTD)') && step1Act) {
-        //     plans[2] = addWorkdays(step1Act, 1);
-        // } else if ((B !== 'OTD' || B !== 'Jewellery (OTD)') && I === 'No' && A) {
-        //     plans[2] = addWorkdays(A, 1);
-        // } else if ((B !== 'OTD' || B !== 'Jewellery (OTD)') && I !== 'No' && step4Act){
-        //     plans[2] = addWorkdays(step4Act, 1);
-        // }
-
-
         if (!hasReadystock) {
             if (!(F === 'Paper Bag' || F === 'Paper Box' || F === 'PVC Pad' || (F || '').endsWith('Tray'))) {
                 if (getAct(2)) plans[5] = addWorkdays(getAct(2), 4);
             }
         }
-
-
-        // step6-foiling
         if (!hasReadystock) {
             if (F === 'Paper Bag' && I === 'Foil Print' && getAct(7)) {
                 plans[6] = addWorkdays(getAct(7), 3);
+            } else if (F !== 'Paper Bag' && I === 'Foil Print' && getAct(3)) {
+                plans[6] = addWorkdays(getAct(3), 3);
             }
-            else if (F !== 'Paper Bag' && I === 'Foil Print' && getAct(3)) { plans[6] = addWorkdays(getAct(3), 3); }
         }
-
-        // step7 - die cutting
         if (!hasReadystock) {
             if (F === 'PVC Pad' && getAct(11)) {
                 plans[7] = addWorkdays(getAct(11), 3);
-            }
-            else if (F === 'Paper Box' && getAct(2)) {
+            } else if (F === 'Paper Box' && getAct(2)) {
                 plans[7] = addWorkdays(getAct(2), 3);
             } else if (I === 'Foil Print' && F === 'Paper Bag' && getAct(3)) {
                 plans[7] = addWorkdays(getAct(3), 3);
-            }
-            else if (F !== 'PVC Pad' && I !== 'Foil Print' && getAct(3)) {
+            } else if (F !== 'PVC Pad' && I !== 'Foil Print' && getAct(3)) {
                 plans[7] = addWorkdays(getAct(3), 3);
-            }
-            else if (F !== 'PVC Pad' && getAct(6)) {
+            } else if (F !== 'PVC Pad' && getAct(6)) {
                 plans[7] = addWorkdays(getAct(6), 3);
-
             }
         }
-
-        // step 8 - full kitting
         if (!hasReadystock) {
             if (F !== 'PVC Pad') {
                 if (F === 'Paper Bag' && I === 'Foil Print' && getAct(6)) {
                     plans[8] = addWorkdays(getAct(6), 3);
-                }
-                else if (F !== 'Paper Bag' && I !== 'Foil Print' && getAct(7)) {
+                } else if (F !== 'Paper Bag' && I !== 'Foil Print' && getAct(7)) {
+                    plans[8] = addWorkdays(getAct(7), 1);
+                } else if (getAct(7)) {
                     plans[8] = addWorkdays(getAct(7), 1);
                 }
             }
         }
-
-        // if (getAct(8)) {
-        //     const condition = (G === 'Magnetic' || (G || '').startsWith('Sliding Handle') && I === 'Screen print') || (G === 'Magnetic' && isOffsetFoil && hasInner) || (G === 'Magnetic' && hasInner && I === 'Screen print');
-        //     if (condition) plans[9] = addWorkdays(getAct(8), 1);
-        // }
-
-        // Case 1: (Magnetic OR Sliding) AND Screen Print
         const case1 = (G === 'Magnetic' || (G || '').startsWith('Sliding Handle')) && I === 'Screen print';
-
-        // Case 2: Magnetic AND Inner AND Offset Foil
         const case2 = G === 'Magnetic' && hasInner && isOffsetFoil;
-
-        // Case 3: Magnetic AND Inner AND Screen Print
         const case3 = G === 'Magnetic' && hasInner && I === 'Screen print';
-
-        // Apply the update if any of the cases are true
         if (getAct(8) && (case1 || case2 || case3)) {
             plans[9] = addWorkdays(getAct(8), 1);
         }
-
-        const isTopBottom = G === 'Top-Bottom';
-        const isSlidingBox = G === 'Sliding Box';
-        const isMagnetic = G === 'Magnetic';
-        const isSlidingHandle = G === 'Sliding Handle Box';
-        const isPaperBag = F === 'Paper Bag';
-
+        const isTopBottom = G === 'Top-Bottom'; const isSlidingBox = G === 'Sliding Box'; const isMagnetic = G === 'Magnetic'; const isSlidingHandle = G === 'Sliding Handle Box'; const isPaperBag = F === 'Paper Bag';
         let targetDate10 = null;
         if (F === 'Paper Box' && getAct(8)) targetDate10 = getAct(8);
         else if (isPaperBag && isScreenPrint) targetDate10 = getAct(12);
@@ -1079,32 +1040,17 @@ const performFmsSync = async () => {
         else if (isTopBottom && hasInner) targetDate10 = getAct(11);
         else if (isTopBottom || isSlidingBox) targetDate10 = getAct(8);
         if (targetDate10) plans[10] = addWorkdays(targetDate10, 2);
-
-        // const base11 = getAct(10) || getAct(9) || getAct(8);
-        // if (base11 && hasInner) plans[11] = addWorkdays(base11, 1);
-
-        const innercase1 = isTopBottom && hasInner;
-        const innercase2 = isMagnetic && hasInner && I === 'Screen print';
-        const innercase3 = isMagnetic && hasInner && isOffsetFoil;
-        const innercase4 = F === 'PVC Pad';
-
-
+        const innercase1 = isTopBottom && hasInner; const innercase2 = isMagnetic && hasInner && I === 'Screen print'; const innercase3 = isMagnetic && hasInner && isOffsetFoil; const innercase4 = F === 'PVC Pad';
         if (innercase4) {
             plans[11] = addWorkdays(getAct(3), 1);
-        }
-        else if (innercase1) {
+        } else if (innercase1) {
             plans[11] = addWorkdays(getAct(8), 1);
         } else if (innercase2) {
             plans[11] = addWorkdays(getAct(12), 1);
         } else if (innercase3) {
             plans[11] = addWorkdays(getAct(9), 1);
         }
-
-
-        // Step12 - Screen Printing
-
         let targetDate12 = null;
-
         if (hasReadystock && I === 'Screen print') targetDate12 = getAct(2);
         else if (F === 'PVC Pad') targetDate12 = getAct(7);
         else if (isPaperBag && isScreenPrint) targetDate12 = getAct(8);
@@ -1113,12 +1059,7 @@ const performFmsSync = async () => {
         else if ((isTopBottom && hasInner) && I === 'Screen print') targetDate12 = getAct(10);
         else if ((isTopBottom || isSlidingBox) && I === 'Screen print') targetDate12 = getAct(10);
         if (targetDate12) plans[12] = addWorkdays(targetDate12, 1);
-
-
-
-
         const isboxtypecon = (F === 'Cards' || F === 'Hooks');
-        // const base13 = getAct(12) || getAct(11) || getAct(10);
         if (hasReadystock && I === 'No') plans[13] = addWorkdays(getAct(2), 1);
         else if (isboxtypecon) plans[13] = addWorkdays(getAct(2), 1);
         else if (F === 'Foam' && getAct(5)) plans[13] = addWorkdays(getAct(5), 1);
@@ -1133,37 +1074,44 @@ const performFmsSync = async () => {
         else if (isTopBottom && hasInner && isScreenPrint) plans[13] = addWorkdays(getAct(12), 1);
         else if ((isTopBottom || isSlidingBox) && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
         else if ((isTopBottom || isSlidingBox) && isScreenPrint) plans[13] = addWorkdays(getAct(12), 1);
-
-
-
-
-
-
         if (getAct(13)) plans[14] = addWorkdays(getAct(13), 1);
         if (getAct(14)) plans[15] = addWorkdays(getAct(14), 1);
-
         if (N) plans[16] = N;
+        // --- PRODUCTION LOGIC END ---
 
-        // 3. GENERATE UPDATE DATA
+        // --- 3. GENERATE UPDATE DATA (FIXED FOR HOLD) ---
         for (let s = 1; s <= 16; s++) {
             const key = `${jobId}_${s}`;
-            const existsInDB = taskMap[key];
+            const existingTask = taskMap[key];
+
             if (plans[s]) {
-                taskUpdates.push([jobId, s, plans[s].format('YYYY-MM-DD HH:mm:ss'), 'Pending']);
-            } else if (existsInDB && !existsInDB.actual) {
-                tasksToDelete.push(existsInDB.id);
+                const sqlDate = plans[s].format('YYYY-MM-DD HH:mm:ss');
+
+                // If the job was already on Hold in the DB, KEEP IT on Hold.
+                const currentStatus = (existingTask && existingTask.status === 'Hold') ? 'Hold' : 'Pending';
+
+                taskUpdates.push([jobId, s, sqlDate, currentStatus]);
+            } else if (existingTask && !existingTask.actual) {
+                tasksToDelete.push(existingTask.id);
             }
         }
     }
 
     // 4. DATABASE UPDATES
     if (tasksToDelete.length > 0) await db.query("DELETE FROM fms_dibiaa_tasks WHERE id IN (?)", [tasksToDelete]);
+
     if (taskUpdates.length > 0) {
-        // REMOVED the IF(status = 'Completed') rule to allow for full recalculation based on actuals
-        const taskSql = `INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) 
-                         VALUES ? 
-                         ON DUPLICATE KEY UPDATE 
-                         plan_date = VALUES(plan_date)`;
+        // --- CRITICAL CHANGE 2: SQL 'IF' Logic to protect Hold and Completed status ---
+        const taskSql = `
+    INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) 
+    VALUES ? 
+    ON DUPLICATE KEY UPDATE 
+    plan_date = IF(status = 'Completed', plan_date, VALUES(plan_date)),
+    status = IF(status = 'Hold' OR status = 'Completed', status, VALUES(status)),
+    hold_reason = hold_reason,
+    hold_timestamp = hold_timestamp,
+    unhold_timestamp = unhold_timestamp`;
+
         await db.query(taskSql, [taskUpdates]);
     }
     return true;
@@ -1355,7 +1303,7 @@ app.put('/fms/clear-log', async (req, res) => {
     const { id } = req.body;
     try {
         await db.query(
-            "UPDATE fms_dibiaa_tasks SET actual_date = NULL, status = 'Pending' WHERE id = ?", 
+            "UPDATE fms_dibiaa_tasks SET actual_date = NULL, status = 'Pending' WHERE id = ?",
             [id]
         );
         res.json({ message: "Log cleared successfully" });
@@ -1482,24 +1430,35 @@ app.post('/fms/reset-job', async (req, res) => {
 
 // Route to Toggle Hold/Unhold status
 app.post('/fms/toggle-hold', async (req, res) => {
-    const { job_number, action } = req.body; // action: 'Hold' or 'Unhold'
+    const { job_number, action, reason } = req.body;
     const newStatus = action === 'Hold' ? 'Hold' : 'Pending';
-    
+    const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
+
     try {
-        // We only put 'Pending' tasks on Hold. Completed tasks stay Completed.
-        const sql = `
-            UPDATE fms_dibiaa_tasks t
-            JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
-            SET t.status = ?
-            WHERE r.job_number = ? AND t.actual_date IS NULL
-        `;
-        
-        const [result] = await db.query(sql, [newStatus, job_number]);
-        
-        if (result.affectedRows === 0) {
-            return res.status(404).json({ message: "No active tasks found for this Job Number" });
+        let sql = "";
+        let params = [];
+
+        if (action === 'Hold') {
+            // Set status to Hold, save reason, and set Hold Timestamp
+            sql = `
+                UPDATE fms_dibiaa_tasks t
+                JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
+                SET t.status = ?, t.hold_reason = ?, t.hold_timestamp = ?
+                WHERE r.job_number = ? AND t.actual_date IS NULL
+            `;
+            params = [newStatus, reason, now, job_number];
+        } else {
+            // Set status back to Pending and set Unhold Timestamp
+            sql = `
+                UPDATE fms_dibiaa_tasks t
+                JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
+                SET t.status = ?, t.unhold_timestamp = ?
+                WHERE r.job_number = ? AND t.actual_date IS NULL
+            `;
+            params = [newStatus, now, job_number];
         }
-        
+
+        await db.query(sql, params);
         res.json({ message: `Job ${job_number} is now ${newStatus}` });
     } catch (e) {
         res.status(500).json({ error: e.message });
