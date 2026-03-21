@@ -127,7 +127,7 @@ const sendWhatsApp = async (mobile, templateName, variables) => {
         data: {
             "messages": [
                 {
-                    "from": "YOUR_SENDER_NUMBER", // Optional or required by DoubleTick
+                    "from": "919910690691", // Optional or required by DoubleTick
                     "to": `+${formattedMobile}`,
                     "content": {
                         "templateName": templateName,
