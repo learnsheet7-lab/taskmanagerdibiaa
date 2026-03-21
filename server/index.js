@@ -504,14 +504,16 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
         const jobMap = {};
         jobs.forEach(j => jobMap[j.sheet_row_index] = j.job_id);
 
-        const [allTasks] = await db.query("SELECT id, job_id, step_id, actual_date FROM fms_dibiaa_tasks");
-        const taskMap = {};
-        allTasks.forEach(t => {
-            taskMap[`${t.job_id}_${t.step_id}`] = {
-                id: t.id,
-                actual: t.actual_date ? dayjs.tz(t.actual_date, "Asia/Kolkata") : null
-            };
-        });
+        // Add 'status' to the query
+const [allTasks] = await db.query("SELECT id, job_id, step_id, actual_date, status FROM fms_dibiaa_tasks");
+const taskMap = {};
+allTasks.forEach(t => {
+    taskMap[`${t.job_id}_${t.step_id}`] = {
+        id: t.id,
+        status: t.status, // Store the current status (Hold/Pending/Completed)
+        actual: t.actual_date ? dayjs.tz(t.actual_date, "Asia/Kolkata") : null
+    };
+});
 
         const taskUpdates = [];
         const tasksToDelete = [];
@@ -723,51 +725,44 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
 
             // --- 4. DATA SYNCHRONIZATION WITH "ACTUAL" CHECK ---
             for (let s = 1; s <= 16; s++) {
-                const key = `${jobId}_${s}`;
-                const existsInDB = taskMap[key];
+    const key = `${jobId}_${s}`;
+    const existingTask = taskMap[key]; // Check what's currently in DB
 
-                if (plans[s]) {
-                    // Logic says task should exist
-                    const sqlDate = plans[s].format('YYYY-MM-DD HH:mm:ss');
-                    taskUpdates.push([jobId, s, sqlDate, 'Pending']);
-                } else {
-                    // Logic says task should NOT exist.
-                    // SAFETY: Only delete if it exists AND actual_date is NULL (not completed).
-                    if (existsInDB && !existsInDB.actual) {
-                        tasksToDelete.push(existsInDB.id);
-                    }
-                }
-            }
+    if (plans[s]) {
+        const sqlDate = plans[s].format('YYYY-MM-DD HH:mm:ss');
+        
+        // LOGIC: If it already exists in DB and is on 'Hold', keep 'Hold'. 
+        // Otherwise, use 'Pending'.
+        const currentStatus = (existingTask && existingTask.status === 'Hold') ? 'Hold' : 'Pending';
+        
+        taskUpdates.push([jobId, s, sqlDate, currentStatus]);
+    } else {
+        // Safety: Only delete if it exists and hasn't been completed
+        if (existingTask && !existingTask.actual) {
+            tasksToDelete.push(existingTask.id);
+        }
+    }
+}
         }
 
         // 5. EXECUTE DATABASE CHANGES
-        if (tasksToDelete.length > 0) {
-            await db.query("DELETE FROM fms_dibiaa_tasks WHERE id IN (?)", [tasksToDelete]);
-        }
+        // 5. EXECUTE DATABASE CHANGES
+if (tasksToDelete.length > 0) {
+    await db.query("DELETE FROM fms_dibiaa_tasks WHERE id IN (?)", [tasksToDelete]);
+}
 
-        if (taskUpdates.length > 0) {
-            const taskSql = `
+if (taskUpdates.length > 0) {
+    const taskSql = `
     INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) 
     VALUES ? 
     ON DUPLICATE KEY UPDATE 
-    plan_date = CASE 
-        -- 1. If the task in the DB is ALREADY 'Completed', keep its original plan_date.
-        WHEN status = 'Completed' THEN plan_date 
-        
-        -- 2. If it is NOT completed (meaning it was just reset to 'Pending'), 
-        -- overwrite it with the NEW calculation from your logic loop.
-        ELSE VALUES(plan_date) 
-    END,
-    -- Also ensure the status is updated to Pending if it was previously something else
-    status = CASE 
-        WHEN status = 'Completed' THEN 'Completed' 
-        ELSE VALUES(status) 
-    END`;
+    plan_date = IF(status = 'Completed', plan_date, VALUES(plan_date)),
+    status = IF(status = 'Hold' OR status = 'Completed', status, VALUES(status))`;
 
-            await db.query(taskSql, [taskUpdates]);
-        }
+    await db.query(taskSql, [taskUpdates]);
+}
 
-        res.json({ message: `Sync Complete. Deleted ${tasksToDelete.length} obsolete tasks.` });
+res.json({ message: `Sync Complete. Deleted ${tasksToDelete.length} obsolete tasks.` });
 
     } catch (e) {
         console.error("Sync Error:", e);
@@ -829,7 +824,7 @@ app.get('/fms/dibiaa-tasks', async (req, res) => {
     FROM fms_dibiaa_tasks t 
     JOIN fms_dibiaa_raw r ON t.job_id = r.job_id 
     JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id 
-    WHERE t.status = 'Pending' AND t.step_id IN (?) 
+    WHERE (t.status = 'Pending' OR t.status = 'Hold') AND t.step_id IN (?)
     ORDER BY t.plan_date ASC`, [stepIds]);
 
         const grouped = {};
@@ -1485,6 +1480,31 @@ app.post('/fms/reset-job', async (req, res) => {
     }
 });
 
+// Route to Toggle Hold/Unhold status
+app.post('/fms/toggle-hold', async (req, res) => {
+    const { job_number, action } = req.body; // action: 'Hold' or 'Unhold'
+    const newStatus = action === 'Hold' ? 'Hold' : 'Pending';
+    
+    try {
+        // We only put 'Pending' tasks on Hold. Completed tasks stay Completed.
+        const sql = `
+            UPDATE fms_dibiaa_tasks t
+            JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
+            SET t.status = ?
+            WHERE r.job_number = ? AND t.actual_date IS NULL
+        `;
+        
+        const [result] = await db.query(sql, [newStatus, job_number]);
+        
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: "No active tasks found for this Job Number" });
+        }
+        
+        res.json({ message: `Job ${job_number} is now ${newStatus}` });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
 
 // Endpoint for Checklist Detail Popup
 app.get('/mis/checklist-tasks', async (req, res) => {
