@@ -1432,34 +1432,34 @@ app.post('/fms/reset-job', async (req, res) => {
 app.post('/fms/toggle-hold', async (req, res) => {
     const { job_number, action, reason } = req.body;
     const newStatus = action === 'Hold' ? 'Hold' : 'Pending';
-    const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
+    
+    // FORCE IST TIMEZONE
+    const nowIST = dayjs().tz("Asia/Kolkata").format('YYYY-MM-DD HH:mm:ss');
 
     try {
         let sql = "";
         let params = [];
 
         if (action === 'Hold') {
-            // Set status to Hold, save reason, and set Hold Timestamp
             sql = `
                 UPDATE fms_dibiaa_tasks t
                 JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
                 SET t.status = ?, t.hold_reason = ?, t.hold_timestamp = ?
                 WHERE r.job_number = ? AND t.actual_date IS NULL
             `;
-            params = [newStatus, reason, now, job_number];
+            params = [newStatus, reason, nowIST, job_number];
         } else {
-            // Set status back to Pending and set Unhold Timestamp
             sql = `
                 UPDATE fms_dibiaa_tasks t
                 JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
                 SET t.status = ?, t.unhold_timestamp = ?
                 WHERE r.job_number = ? AND t.actual_date IS NULL
             `;
-            params = [newStatus, now, job_number];
+            params = [newStatus, nowIST, job_number];
         }
 
         await db.query(sql, params);
-        res.json({ message: `Job ${job_number} is now ${newStatus}` });
+        res.json({ message: `Job ${job_number} is now ${newStatus} at IST ${nowIST}` });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
