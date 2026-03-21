@@ -5,7 +5,8 @@ const cors = require('cors');
 const dayjs = require('dayjs');
 const customParseFormat = require('dayjs/plugin/customParseFormat');
 const timezone = require('dayjs/plugin/timezone'); // Add this
-const utc = require('dayjs/plugin/utc');           // Add this
+const utc = require('dayjs/plugin/utc');   
+const axios = require('axios');        // Add this
 
 dayjs.extend(customParseFormat);
 dayjs.extend(utc);      // Add this
@@ -106,6 +107,50 @@ const addWorkdays = (startDate, days) => {
 
     return d;
 };
+
+// whatsapp code 
+
+const sendWhatsApp = async (mobile, templateName, variables) => {
+    // Basic validation
+    if (!mobile || mobile.length < 10) return console.log("Invalid mobile number");
+
+    // Ensure mobile has 91 prefix if not already present
+    const formattedMobile = mobile.startsWith('91') ? mobile : `91${mobile}`;
+
+    const config = {
+        method: 'post',
+        url: 'https://public.doubletick.io/whatsapp/message/template',
+        headers: { 
+            'Authorization': 'key_3UoCIEFWON', // Replace with your real key
+            'Content-Type': 'application/json'
+        },
+        data: {
+            "messages": [
+                {
+                    "from": "YOUR_SENDER_NUMBER", // Optional or required by DoubleTick
+                    "to": `+${formattedMobile}`,
+                    "content": {
+                        "templateName": templateName,
+                        "templateData": {
+                            "body": {
+                                "placeholders": variables
+                            }
+                        },
+                        "language": "en"
+                    }
+                }
+            ]
+        }
+    };
+
+    try {
+        await axios(config);
+        console.log(`WhatsApp sent: ${templateName} to ${mobile}`);
+    } catch (error) {
+        console.error("WhatsApp API Error:", error.response?.data || error.message);
+    }
+};
+
 // --- AUTH & USERS ---
 app.post('/login', async (req, res) => { try { const [r] = await db.query("SELECT * FROM users WHERE (email = ? OR mobile = ?) AND password = ?", [req.body.identifier, req.body.identifier, req.body.password]); res.json(r.length ? r[0] : { message: "User not found" }); } catch (e) { res.status(500).json(e); } });
 app.get('/users', async (req, res) => { const [r] = await db.query("SELECT * FROM users"); res.json(r); });
@@ -270,46 +315,81 @@ app.get('/checklist/:email/:role', async (req, res) => {
 app.put('/checklist/complete', async (req, res) => { await db.query("UPDATE checklist_tasks SET status='Completed', completed_at=NOW() WHERE id=?", [req.body.id]); res.json({ message: "Done" }); });
 
 // --- TASKS MODULE ---
-app.post('/tasks', async (req, res) => { await db.query("INSERT INTO tasks (task_uid,employee_name,assigned_to_email,approver_email,description,target_date,priority,approval_needed,assigned_by,remarks,status,previous_status) VALUES (?,?,?,?,?,?,?,?,?,?,'Pending','Pending')", ['T-' + Math.floor(Math.random() * 9000), req.body.employee_name, req.body.email, req.body.approver_email, req.body.description, req.body.target_date, req.body.priority, req.body.approval_needed, req.body.assigned_by || 'System', req.body.remarks || '']); res.json({ message: "Delegated" }); });
+app.post('/tasks', async (req, res) => { 
+    const { employee_name, email, approver_email, description, target_date, priority, approval_needed, assigned_by, remarks } = req.body;
+    
+    // 1. Insert into Database
+    await db.query("INSERT INTO tasks (task_uid,employee_name,assigned_to_email,approver_email,description,target_date,priority,approval_needed,assigned_by,remarks,status,previous_status) VALUES (?,?,?,?,?,?,?,?,?,?,'Pending','Pending')", 
+        ['T-' + Math.floor(Math.random() * 9000), employee_name, email, approver_email, description, target_date, priority, approval_needed, assigned_by || 'System', remarks || '']
+    );
+
+    // 2. WhatsApp Notification: delegation_1
+    try {
+        const [userRow] = await db.query("SELECT mobile FROM users WHERE email = ?", [email]);
+        if (userRow.length > 0 && userRow[0].mobile) {
+            // {{1}} Name, {{2}} Desc, {{3}} Date, {{4}} Priority
+            const vars = [employee_name, description, dayjs(target_date).format('DD/MM/YYYY'), priority];
+            await sendWhatsApp(userRow[0].mobile, 'delegation_1', vars);
+        }
+    } catch (e) { console.error("WhatsApp Error:", e); }
+
+    res.json({ message: "Delegated" }); 
+});
 app.get('/tasks/:email/:role', async (req, res) => { const q = req.params.role === 'Admin' ? "SELECT * FROM tasks ORDER BY created_at DESC" : "SELECT * FROM tasks WHERE assigned_to_email=? ORDER BY created_at DESC"; const [r] = await db.query(q, [req.params.email]); res.json(r); });
 app.delete('/tasks/:id', async (req, res) => { await db.query("DELETE FROM tasks WHERE id=?", [req.params.id]); res.json({ message: "Deleted" }); });
 app.put('/tasks/update-status', async (req, res) => {
     const { id, status, revised_date, remarks, is_rejection } = req.body;
 
     try {
+        // Fetch task details first for WhatsApp variables
+        const [taskData] = await db.query("SELECT * FROM tasks WHERE id = ?", [id]);
+        const task = taskData[0];
+
         if (is_rejection) {
-            // If rejected, revert to previous status and clear completed_at just in case
-            await db.query(
-                `UPDATE tasks SET 
-                    status = CASE WHEN previous_status IS NULL OR previous_status='' OR previous_status='Waiting Approval' THEN 'Pending' ELSE previous_status END,
-                    completed_at = NULL 
-                 WHERE id=?`,
-                [id]
-            );
+            await db.query(`UPDATE tasks SET status = CASE WHEN previous_status IS NULL OR previous_status='' OR previous_status='Waiting Approval' THEN 'Pending' ELSE previous_status END, completed_at = NULL WHERE id=?`, [id]);
+            
+            // WHATSAPP: Decision Rejected (revised_request_status)
+            if (task.status === 'Revision Requested') {
+                const [doer] = await db.query("SELECT mobile FROM users WHERE email = ?", [task.assigned_to_email]);
+                if (doer[0]?.mobile) {
+                    const vars = [task.employee_name, task.description, dayjs(task.target_date).format('DD/MM/YYYY'), dayjs(task.revised_date_request).format('DD/MM/YYYY'), 'Rejected'];
+                    sendWhatsApp(doer[0].mobile, 'revised_request_status', vars);
+                }
+            }
         }
         else if (status === 'Revision Requested') {
-            await db.query(
-                "UPDATE tasks SET previous_status=status, status=?, revised_date_request=?, revision_remarks=? WHERE id=?",
-                [status, revised_date, remarks, id]
-            );
+            await db.query("UPDATE tasks SET previous_status=status, status=?, revised_date_request=?, revision_remarks=? WHERE id=?", [status, revised_date, remarks, id]);
+            
+            // WHATSAPP: Raise Request to Admin (revised_request)
+            const [admins] = await db.query("SELECT mobile, name FROM users WHERE role = 'Admin'");
+            admins.forEach(admin => {
+                if (admin.mobile) {
+                    const vars = [admin.name, task.employee_name, task.description, dayjs(task.target_date).format('DD/MM/YYYY'), dayjs(revised_date).format('DD/MM/YYYY')];
+                    sendWhatsApp(admin.mobile, 'revised_request', vars);
+                }
+            });
         }
         else if (status === 'Revised') {
-            await db.query(
-                "UPDATE tasks SET status='Revised', target_date=revised_date_request WHERE id=?",
-                [id]
-            );
+            await db.query("UPDATE tasks SET status='Revised', target_date=revised_date_request WHERE id=?", [id]);
+            
+            // WHATSAPP: Decision Approved (revised_request_status)
+            const [doer] = await db.query("SELECT mobile FROM users WHERE email = ?", [task.assigned_to_email]);
+            if (doer[0]?.mobile) {
+                const vars = [task.employee_name, task.description, dayjs(task.target_date).format('DD/MM/YYYY'), dayjs(task.revised_date_request).format('DD/MM/YYYY'), 'Approved'];
+                sendWhatsApp(doer[0].mobile, 'revised_request_status', vars);
+            }
         }
         else {
-            // STANDARD STATUS UPDATE (Handles 'Completed' and others)
-            // We use CASE to set completed_at only if the status is being set to 'Completed'
-            await db.query(
-                `UPDATE tasks SET 
-                    previous_status = status, 
-                    status = ?, 
-                    completed_at = CASE WHEN ? = 'Completed' THEN NOW() ELSE NULL END 
-                 WHERE id = ?`,
-                [status, status, id]
-            );
+            await db.query(`UPDATE tasks SET previous_status = status, status = ?, completed_at = CASE WHEN ? = 'Completed' THEN NOW() ELSE NULL END WHERE id = ?`, [status, status, id]);
+            
+            // WHATSAPP: Completed notification to Assignee (task_approval)
+            if (status === 'Completed' || status === 'Waiting Approval') {
+                const [assignee] = await db.query("SELECT mobile, name FROM users WHERE name = ?", [task.assigned_by]);
+                if (assignee[0]?.mobile) {
+                    const vars = [assignee[0].name, task.employee_name, task.description, dayjs(task.target_date).format('DD/MM/YYYY')];
+                    sendWhatsApp(assignee[0].mobile, 'task_approval', vars);
+                }
+            }
         }
 
         res.json({ message: "Updated" });
