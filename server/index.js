@@ -109,45 +109,49 @@ const addWorkdays = (startDate, days) => {
 };
 
 // whatsapp code 
-
+//key_3UoCIEFWON
 const sendWhatsApp = async (mobile, templateName, variables) => {
-    // Basic validation
-    if (!mobile || mobile.length < 10) return console.log("Invalid mobile number");
+    if (!mobile || mobile.length < 10) return;
+    
+    // Clean the mobile number: remove any non-numeric characters
+    const cleanMobile = mobile.replace(/\D/g, '');
+    const formattedMobile = cleanMobile.startsWith('91') ? cleanMobile : `91${cleanMobile}`;
 
-    // Ensure mobile has 91 prefix if not already present
-    const formattedMobile = mobile.startsWith('91') ? mobile : `91${mobile}`;
-
-    const config = {
-        method: 'post',
-        url: 'https://public.doubletick.io/whatsapp/message/template',
-        headers: { 
-            'Authorization': 'key_3UoCIEFWON', // Replace with your real key
-            'Content-Type': 'application/json'
-        },
-        data: {
-            "messages": [
-                {
-                    "from": "919910690691", // Optional or required by DoubleTick
-                    "to": `+${formattedMobile}`,
-                    "content": {
-                        "templateName": templateName,
-                        "templateData": {
-                            "body": {
-                                "placeholders": variables
-                            }
-                        },
-                        "language": "en"
-                    }
+    const data = {
+        "messages": [
+            {
+                "from": "919910690691", 
+                "to": formattedMobile, // REMOVED the "+" sign here
+                "content": {
+                    "templateName": templateName,
+                    "templateData": {
+                        "body": {
+                            "placeholders": variables
+                        }
+                    },
+                    "language": "en"
                 }
-            ]
-        }
+            }
+        ]
     };
 
     try {
-        await axios(config);
-        console.log(`WhatsApp sent: ${templateName} to ${mobile}`);
+        const response = await axios({
+            method: 'post',
+            url: 'https://public.doubletick.io/whatsapp/message/template',
+            headers: { 
+                'Authorization': 'key_3UoCIEFWON',
+                'Content-Type': 'application/json'
+            },
+            data: data
+        });
+
+        // This will print the DoubleTick Message ID or a failure reason
+        console.log("DoubleTick Response:", JSON.stringify(response.data, null, 2));
+        
     } catch (error) {
-        console.error("WhatsApp API Error:", error.response?.data || error.message);
+        // This will tell you if the template name is wrong or variables count is wrong
+        console.error("DoubleTick Error Detail:", error.response?.data || error.message);
     }
 };
 
@@ -326,6 +330,9 @@ app.post('/tasks', async (req, res) => {
     // 2. WhatsApp Notification: delegation_1
     try {
         const [userRow] = await db.query("SELECT mobile FROM users WHERE email = ?", [email]);
+        // Add this inside your post route temporarily to test
+const testVars = ["Farhaan", "Fix the Sync Issue", "22-03-2026", "High"];
+sendWhatsApp("7048462595", "delegation_1", testVars);
         if (userRow.length > 0 && userRow[0].mobile) {
             // {{1}} Name, {{2}} Desc, {{3}} Date, {{4}} Priority
             const vars = [employee_name, description, dayjs(target_date).format('DD/MM/YYYY'), priority];
