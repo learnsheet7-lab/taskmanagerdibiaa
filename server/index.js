@@ -1375,14 +1375,54 @@ app.get('/mis/checklist-report', async (req, res) => {
 app.get('/fms/logs', async (req, res) => {
     try {
         const sql = `
-            SELECT t.id, r.job_number,r.quantity, s.step_name, t.plan_date, t.actual_date, t.step_id
+            SELECT 
+                t.*, 
+                r.job_number, 
+                r.quantity, 
+                s.step_name
             FROM fms_dibiaa_tasks t
-            JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
-            JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
-            ORDER BY r.job_number DESC, t.step_id ASC`;
+            LEFT JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
+            LEFT JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
+            ORDER BY t.actual_date DESC`;
+            
         const [rows] = await db.query(sql);
         res.json(rows);
-    } catch (e) { res.status(500).json({ error: e.message }); }
+    } catch (e) { 
+        console.error("SQL Error:", e.message); 
+        res.status(500).json({ error: e.message }); 
+    }
+});
+
+app.get('/fms/contractor-logs', async (req, res) => {
+    try {
+        const sql = `
+            SELECT 
+                t_work.id, 
+                t_assign.custom_field_1 AS contractor_name, -- Pulled from Step 8
+                r.job_number, 
+                r.quantity, 
+                s.step_name, 
+                t_work.plan_date, 
+                t_work.actual_date, 
+                t_work.step_id
+            FROM fms_dibiaa_tasks t_work
+            /* Join with Step 8 to get the name */
+            INNER JOIN fms_dibiaa_tasks t_assign 
+                ON t_work.job_id = t_assign.job_id 
+                AND t_assign.step_id = 8 
+            INNER JOIN fms_dibiaa_raw r ON t_work.job_id = r.job_id
+            INNER JOIN fms_dibiaa_steps_config s ON t_work.step_id = s.step_id
+            /* Focus only on the work steps */
+            WHERE t_work.step_id IN (9, 10)
+              AND t_assign.custom_field_1 IS NOT NULL 
+              AND t_assign.custom_field_1 != '---'
+            ORDER BY t_work.plan_date DESC`;
+            
+        const [rows] = await db.query(sql);
+        res.json(rows);
+    } catch (e) { 
+        res.status(500).json({ error: e.message }); 
+    }
 });
 
 // 1. CLEAR LOG: Sets actual_date to NULL and status back to Pending
