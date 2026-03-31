@@ -1425,6 +1425,33 @@ app.get('/fms/contractor-logs', async (req, res) => {
     }
 });
 
+app.get('/fms/printer-logs', async (req, res) => {
+    try {
+        const sql = `
+            SELECT 
+                t.id, 
+                t.custom_field_1 AS printer_name, 
+                r.job_number, 
+                r.quantity, 
+                s.step_name, 
+                t.plan_date, 
+                t.actual_date, 
+                t.step_id
+            FROM fms_dibiaa_tasks t
+            INNER JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
+            INNER JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
+            WHERE t.step_id IN (11, 12) 
+              AND t.custom_field_1 IS NOT NULL 
+              AND t.custom_field_1 != '---'
+            ORDER BY t.plan_date DESC`;
+            
+        const [rows] = await db.query(sql);
+        res.json(rows);
+    } catch (e) { 
+        res.status(500).json({ error: e.message }); 
+    }
+});
+
 // 1. CLEAR LOG: Sets actual_date to NULL and status back to Pending
 app.put('/fms/clear-log', async (req, res) => {
     const { id } = req.body;
