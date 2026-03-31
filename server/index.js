@@ -1431,19 +1431,20 @@ app.get('/fms/printer-logs', async (req, res) => {
             SELECT 
                 t.id, 
                 t.custom_field_1 AS printer_name, 
+                t.custom_field_2 AS step_qty, -- The actual production count
                 r.job_number, 
-                r.quantity, 
                 s.step_name, 
                 t.plan_date, 
                 t.actual_date, 
                 t.step_id
             FROM fms_dibiaa_tasks t
-            INNER JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
-            INNER JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
+            LEFT JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
+            LEFT JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
             WHERE t.step_id IN (11, 12) 
+              AND t.actual_date IS NOT NULL
               AND t.custom_field_1 IS NOT NULL 
               AND t.custom_field_1 != '---'
-            ORDER BY t.plan_date DESC`;
+            ORDER BY t.actual_date DESC`;
             
         const [rows] = await db.query(sql);
         res.json(rows);
