@@ -348,14 +348,15 @@ app.put('/tasks/update-status', async (req, res) => {
     const { id, status, revised_date, remarks, is_rejection } = req.body;
 
     try {
-        // Fetch task details first for WhatsApp variables
+        // 1. Fetch task details first for WhatsApp variables and current state
         const [taskData] = await db.query("SELECT * FROM tasks WHERE id = ?", [id]);
+        if (taskData.length === 0) return res.status(404).json({ message: "Task not found" });
         const task = taskData[0];
 
+        // 2. Handle Rejection (Revision Requested -> Back to previous)
         if (is_rejection) {
             await db.query(`UPDATE tasks SET status = CASE WHEN previous_status IS NULL OR previous_status='' OR previous_status='Waiting Approval' THEN 'Pending' ELSE previous_status END, completed_at = NULL WHERE id=?`, [id]);
             
-            // WHATSAPP: Decision Rejected (revised_request_status)
             if (task.status === 'Revision Requested') {
                 const [doer] = await db.query("SELECT mobile FROM users WHERE email = ?", [task.assigned_to_email]);
                 if (doer[0]?.mobile) {
@@ -364,10 +365,10 @@ app.put('/tasks/update-status', async (req, res) => {
                 }
             }
         }
+        // 3. Handle New Revision Request
         else if (status === 'Revision Requested') {
             await db.query("UPDATE tasks SET previous_status=status, status=?, revised_date_request=?, revision_remarks=? WHERE id=?", [status, revised_date, remarks, id]);
             
-            // WHATSAPP: Raise Request to Admin (revised_request)
             const [admins] = await db.query("SELECT mobile, name FROM users WHERE role = 'Admin'");
             admins.forEach(admin => {
                 if (admin.mobile) {
@@ -376,20 +377,30 @@ app.put('/tasks/update-status', async (req, res) => {
                 }
             });
         }
+        // 4. Handle Admin Approving Revision
         else if (status === 'Revised') {
             await db.query("UPDATE tasks SET status='Revised', target_date=revised_date_request WHERE id=?", [id]);
             
-            // WHATSAPP: Decision Approved (revised_request_status)
             const [doer] = await db.query("SELECT mobile FROM users WHERE email = ?", [task.assigned_to_email]);
             if (doer[0]?.mobile) {
                 const vars = [task.employee_name, task.description, dayjs(task.target_date).format('DD/MM/YYYY'), dayjs(task.revised_date_request).format('DD/MM/YYYY'), 'Approved'];
                 sendWhatsApp(doer[0].mobile, 'revised_request_status', vars);
             }
         }
+        // --- NEW: 5. Handle ADMIN HOLD ---
+        else if (status === 'Hold') {
+            // Save the CURRENT status into previous_status before moving to Hold
+            await db.query("UPDATE tasks SET previous_status = status, status = 'Hold' WHERE id = ?", [id]);
+        }
+        // --- NEW: 6. Handle ADMIN UNHOLD ---
+        else if (status === 'Unhold') {
+            // Restore status from previous_status and reset previous to Pending
+            await db.query("UPDATE tasks SET status = previous_status, previous_status = 'Pending' WHERE id = ?", [id]);
+        }
+        // 7. General Status Updates (Completed, Waiting Approval, etc.)
         else {
             await db.query(`UPDATE tasks SET previous_status = status, status = ?, completed_at = CASE WHEN ? = 'Completed' THEN NOW() ELSE NULL END WHERE id = ?`, [status, status, id]);
             
-            // WHATSAPP: Completed notification to Assignee (task_approval)
             if (status === 'Completed' || status === 'Waiting Approval') {
                 const [assignee] = await db.query("SELECT mobile, name FROM users WHERE name = ?", [task.assigned_by]);
                 if (assignee[0]?.mobile) {
