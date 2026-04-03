@@ -571,6 +571,7 @@ app.get('/mis/report', async (req, res) => {
     const [rows] = await db.query(sql, [end, start, end]);
     res.json(rows);
 });
+
 app.post('/fms/sync-dibiaa', async (req, res) => {
     try {
         const SHEET_ID = '1C3qHR_jbjHgOQCM7MwRB4AZXtuY2W9jLpqIAEbYFWkQ';
@@ -582,52 +583,32 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
         const rows = response.data.values;
         if (!rows || rows.length === 0) return res.json({ message: "No data found" });
 
-        // 1. PREPARE RAW DATA
+        // 1. UPDATE RAW DATA
         const rawValues = rows.map((r, i) => [
-            2 + i, // sheet_row_index (Now just a regular number for your reference)
-            parseToMySQLDateTime(r[0]), r[1], 
-            String(r[2]).trim(), // job_number (THE UNIQUE KEY)
-            r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], 
-            parseToMySQLDate(r[13]), r[14]
+            2 + i, parseToMySQLDateTime(r[0]), r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], parseToMySQLDate(r[13]), r[14]
         ]);
 
-        // 2. INSERT/UPDATE RAW DATA BY JOB_NUMBER
-        // Because job_number is now UNIQUE in DB, this will find the right job 
-        // even if its sheet_row_index has changed from 641 to 640.
         const rawSql = `INSERT INTO fms_dibiaa_raw (sheet_row_index, timestamp, otd_type, job_number, order_by, company_name, box_type, box_style, box_color, printing_type, printing_color, specification, city, quantity, lead_time, repeat_new) 
                         VALUES ? 
                         ON DUPLICATE KEY UPDATE 
-                        sheet_row_index=VALUES(sheet_row_index),
-                        timestamp=VALUES(timestamp),
-                        otd_type=VALUES(otd_type), 
-                        box_type=VALUES(box_type), 
-                        printing_type=VALUES(printing_type), 
-                        quantity=VALUES(quantity), 
-                        company_name=VALUES(company_name), 
-                        box_style=VALUES(box_style),
-                        box_color=VALUES(box_color), 
-                        printing_color=VALUES(printing_color), 
-                        specification=VALUES(specification),
-                        city=VALUES(city), 
-                        lead_time=VALUES(lead_time), 
-                        repeat_new=VALUES(repeat_new)`;
-        
+                        otd_type=VALUES(otd_type), box_type=VALUES(box_type), printing_type=VALUES(printing_type), 
+                        quantity=VALUES(quantity), company_name=VALUES(company_name), box_style=VALUES(box_style),
+                        box_color=VALUES(box_color), printing_color=VALUES(printing_color), specification=VALUES(specification),
+                        city=VALUES(city), lead_time=VALUES(lead_time), repeat_new=VALUES(repeat_new)`;
         await db.query(rawSql, [rawValues]);
 
-        // 3. MAP JOB_ID TO JOB_NUMBER
-        const [jobs] = await db.query("SELECT job_id, job_number FROM fms_dibiaa_raw");
+        // 2. PREPARE MAPS
+        const [jobs] = await db.query("SELECT job_id, sheet_row_index FROM fms_dibiaa_raw");
         const jobMap = {};
-        jobs.forEach(j => {
-            jobMap[String(j.job_number).trim()] = j.job_id;
-        });
+        jobs.forEach(j => jobMap[j.sheet_row_index] = j.job_id);
 
-        // 4. PREPARE TASK MAP
+        // Add 'status' to the query
         const [allTasks] = await db.query("SELECT id, job_id, step_id, actual_date, status FROM fms_dibiaa_tasks");
         const taskMap = {};
         allTasks.forEach(t => {
             taskMap[`${t.job_id}_${t.step_id}`] = {
                 id: t.id,
-                status: t.status,
+                status: t.status, // Store the current status (Hold/Pending/Completed)
                 actual: t.actual_date ? dayjs.tz(t.actual_date, "Asia/Kolkata") : null
             };
         });
@@ -635,52 +616,136 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
         const taskUpdates = [];
         const tasksToDelete = [];
 
-        // 5. PROCESS ROWS
+        // 3. RE-EVALUATE LOGIC
         for (let i = 0; i < rows.length; i++) {
             const r = rows[i];
-            const jobNumber = String(r[2]).trim();
-            const jobId = jobMap[jobNumber]; 
-            
+            const rowIndex = 2 + i;
+            const jobId = jobMap[rowIndex];
             if (!jobId) continue;
 
             const getAct = (s) => taskMap[`${jobId}_${s}`]?.actual || null;
-            const A = parseDate(r[0]), B = r[1], F = r[5], G = r[6], I = r[8], K = r[10], N = parseDate(r[13]);
-            const hasInner = K && (K.toLowerCase().includes('inner print') || K.toLowerCase().includes('inner screen print'));
-            const hasReadystock = K && (K.toLowerCase().includes('ready stock') || K.toLowerCase().includes('ready to stock'));
+
+            const A = parseDate(r[0]);
+            const B = r[1];
+            const F = r[5];
+            const G = r[6];
+            const I = r[8];
+            const K = r[10];
+            const N = parseDate(r[13]);
+
+            const hasInner = K && K.toLowerCase().includes('inner print') || K.toLowerCase().includes('inner screen print');
+            const hasReadystock = K && K.toLowerCase().includes('ready stock') || K.toLowerCase().includes('ready to stock');
+
             const isOffsetFoil = (I === 'Offset Print' || I === 'Foil Print' || I === 'No');
             const isScreenPrint = (I === 'Screen print');
 
             let plans = {};
-            // --- YOUR STEP LOGIC (Retained exactly) ---
-            if (A) plans[4] = addWorkdays(A, 3);
+
+            // --- START LOGIC ---
+            if (A) plans[4] = addWorkdays(A, 3);  //step4
+
             const step4Act = getAct(4);
-            if ((B === 'OTD' || B === 'Jewellery (OTD)') && step4Act) plans[1] = addWorkdays(step4Act, 6);
-            if (B === 'OTD' || B === 'Jewellery (OTD)') plans[2] = addWorkdays(getAct(1), 1);
-            else if (getAct(4)) plans[2] = addWorkdays(getAct(4), 1);
-            if (!hasReadystock && !(F === 'Paper Box' || F === 'Foam')) { if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1); }
-            if (!hasReadystock && !(F === 'Paper Bag' || F === 'Paper Box' || F === 'PVC Pad' || (F || '').endsWith('Tray'))) { if (getAct(2)) plans[5] = addWorkdays(getAct(2), 4); }
+            if ((B === 'OTD' || B === 'Jewellery (OTD)' && step4Act)) plans[1] = addWorkdays(step4Act, 6); // step1
+
+            if (B === 'OTD' || B === 'Jewellery (OTD)') {
+                plans[2] = addWorkdays(getAct(1), 1);
+            } else if (getAct(4)) {
+                plans[2] = addWorkdays(getAct(4), 1);
+            }
+            //step2
             if (!hasReadystock) {
-                if (F === 'Paper Bag' && I === 'Foil Print' && getAct(7)) plans[6] = addWorkdays(getAct(7), 3);
-                else if (F !== 'Paper Bag' && I === 'Foil Print' && getAct(3)) plans[6] = addWorkdays(getAct(3), 3);
+                if (!(F === 'Paper Box' || F === 'Foam')) {
+                    if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1);  //step3
+                }
             }
+
+
+            // const step1Act = getAct(1);
+            // if ((B === 'OTD' || B === 'Jewellery (OTD)') && step1Act) {
+            //     plans[2] = addWorkdays(step1Act, 1);
+            // } else if ((B !== 'OTD' || B !== 'Jewellery (OTD)') && I === 'No' && A) {
+            //     plans[2] = addWorkdays(A, 1);
+            // } else if ((B !== 'OTD' || B !== 'Jewellery (OTD)') && I !== 'No' && step4Act){
+            //     plans[2] = addWorkdays(step4Act, 1);
+            // }
+
+
             if (!hasReadystock) {
-                if (F === 'PVC Pad' && getAct(11)) plans[7] = addWorkdays(getAct(11), 3);
-                else if (F === 'Paper Box' && getAct(2)) plans[7] = addWorkdays(getAct(2), 3);
-                else if (I === 'Foil Print' && F === 'Paper Bag' && getAct(3)) plans[7] = addWorkdays(getAct(3), 3);
-                else if (F !== 'PVC Pad' && I !== 'Foil Print' && getAct(3)) plans[7] = addWorkdays(getAct(3), 3);
-                else if (F !== 'PVC Pad' && getAct(6)) plans[7] = addWorkdays(getAct(6), 3);
+                if (!(F === 'Paper Bag' || F === 'Paper Box' || F === 'PVC Pad' || (F || '').endsWith('Tray'))) {
+                    if (getAct(2)) plans[5] = addWorkdays(getAct(2), 4);
+                }
             }
-            if (!hasReadystock && F !== 'PVC Pad') {
-                if (F === 'Paper Bag' && I === 'Foil Print' && getAct(6)) plans[8] = addWorkdays(getAct(6), 3);
-                else if (F === 'Paper Bag' && I !== 'Foil Print' && getAct(7)) plans[8] = addWorkdays(getAct(7), 1);
-                else if (F !== 'Paper Bag' && I !== 'Foil Print' && getAct(7)) plans[8] = addWorkdays(getAct(7), 1);
-                else if (getAct(7)) plans[8] = addWorkdays(getAct(7), 1);
+
+
+            // step6-foiling
+            if (!hasReadystock) {
+                if (F === 'Paper Bag' && I === 'Foil Print' && getAct(7)) {
+                    plans[6] = addWorkdays(getAct(7), 3);
+                }
+                else if (F !== 'Paper Bag' && I === 'Foil Print' && getAct(3)) { plans[6] = addWorkdays(getAct(3), 3); }
             }
+
+            // step7 - die cutting
+            if (!hasReadystock) {
+                if (F === 'PVC Pad' && getAct(11)) {
+                    plans[7] = addWorkdays(getAct(11), 3);
+                }
+                else if (F === 'Paper Box' && getAct(2)) {
+                    plans[7] = addWorkdays(getAct(2), 3);
+                } else if (I === 'Foil Print' && F === 'Paper Bag' && getAct(3)) {
+                    plans[7] = addWorkdays(getAct(3), 3);
+                }
+                else if (F !== 'PVC Pad' && I !== 'Foil Print' && getAct(3)) {
+                    plans[7] = addWorkdays(getAct(3), 3);
+                }
+                else if (F !== 'PVC Pad' && getAct(6)) {
+                    plans[7] = addWorkdays(getAct(6), 3);
+
+                }
+            }
+
+            // step 8 - full kitting
+            if (!hasReadystock) {
+                if (F !== 'PVC Pad') {
+                    if (F === 'Paper Bag' && I === 'Foil Print' && getAct(6)) {
+                        plans[8] = addWorkdays(getAct(6), 3);
+                    }
+                    else if (F === 'Paper Bag' && I !== 'Foil Print' && getAct(7)) {
+                        plans[8] = addWorkdays(getAct(7), 1);
+                    }
+                    else if (F !== 'Paper Bag' && I !== 'Foil Print' && getAct(7)) {
+                        plans[8] = addWorkdays(getAct(7), 1);
+                    } else if (getAct(7)) {
+                        plans[8] = addWorkdays(getAct(7), 1);
+                    }
+                }
+            }
+
+            // if (getAct(8)) {
+            //     const condition = (G === 'Magnetic' || (G || '').startsWith('Sliding Handle') && I === 'Screen print') || (G === 'Magnetic' && isOffsetFoil && hasInner) || (G === 'Magnetic' && hasInner && I === 'Screen print');
+            //     if (condition) plans[9] = addWorkdays(getAct(8), 1);
+            // }
+
+            // Case 1: (Magnetic OR Sliding) AND Screen Print
             const case1 = (G === 'Magnetic' || (G || '').startsWith('Sliding Handle')) && I === 'Screen print';
+
+            // Case 2: Magnetic AND Inner AND Offset Foil
             const case2 = G === 'Magnetic' && hasInner && isOffsetFoil;
+
+            // Case 3: Magnetic AND Inner AND Screen Print
             const case3 = G === 'Magnetic' && hasInner && I === 'Screen print';
-            if (getAct(8) && (case1 || case2 || case3)) plans[9] = addWorkdays(getAct(8), 1);
-            const isTopBottom = G === 'Top-Bottom', isSlidingBox = G === 'Sliding Box', isMagnetic = G === 'Magnetic', isSlidingHandle = G === 'Sliding Handle Box', isPaperBag = F === 'Paper Bag';
+
+            // Apply the update if any of the cases are true
+            if (getAct(8) && (case1 || case2 || case3)) {
+                plans[9] = addWorkdays(getAct(8), 1);
+            }
+
+            const isTopBottom = G === 'Top-Bottom';
+            const isSlidingBox = G === 'Sliding Box';
+            const isMagnetic = G === 'Magnetic';
+            const isSlidingHandle = G === 'Sliding Handle Box';
+            const isPaperBag = F === 'Paper Bag';
+
             let targetDate10 = null;
             if (F === 'Paper Box' && getAct(8)) targetDate10 = getAct(8);
             else if (isPaperBag && isScreenPrint) targetDate10 = getAct(12);
@@ -691,12 +756,32 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             else if (isTopBottom && hasInner) targetDate10 = getAct(11);
             else if (isTopBottom || isSlidingBox) targetDate10 = getAct(8);
             if (targetDate10) plans[10] = addWorkdays(targetDate10, 2);
-            const innercase1 = isTopBottom && hasInner, innercase2 = isMagnetic && hasInner && I === 'Screen print', innercase3 = isMagnetic && hasInner && isOffsetFoil, innercase4 = F === 'PVC Pad';
-            if (innercase4) plans[11] = addWorkdays(getAct(3), 1);
-            else if (innercase1) plans[11] = addWorkdays(getAct(8), 1);
-            else if (innercase2) plans[11] = addWorkdays(getAct(12), 1);
-            else if (innercase3) plans[11] = addWorkdays(getAct(9), 1);
+
+            // const base11 = getAct(10) || getAct(9) || getAct(8);
+            // if (base11 && hasInner) plans[11] = addWorkdays(base11, 1);
+
+            const innercase1 = isTopBottom && hasInner;
+            const innercase2 = isMagnetic && hasInner && I === 'Screen print';
+            const innercase3 = isMagnetic && hasInner && isOffsetFoil;
+            const innercase4 = F === 'PVC Pad';
+
+
+            if (innercase4) {
+                plans[11] = addWorkdays(getAct(3), 1);
+            }
+            else if (innercase1) {
+                plans[11] = addWorkdays(getAct(8), 1);
+            } else if (innercase2) {
+                plans[11] = addWorkdays(getAct(12), 1);
+            } else if (innercase3) {
+                plans[11] = addWorkdays(getAct(9), 1);
+            }
+
+
+            // Step12 - Screen Printing
+
             let targetDate12 = null;
+
             if (hasReadystock && I === 'Screen print') targetDate12 = getAct(2);
             else if (F === 'PVC Pad') targetDate12 = getAct(7);
             else if (isPaperBag && isScreenPrint) targetDate12 = getAct(8);
@@ -705,7 +790,12 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             else if ((isTopBottom && hasInner) && I === 'Screen print') targetDate12 = getAct(10);
             else if ((isTopBottom || isSlidingBox) && I === 'Screen print') targetDate12 = getAct(10);
             if (targetDate12) plans[12] = addWorkdays(targetDate12, 1);
+
+
+
+
             const isboxtypecon = (F === 'Cards' || F === 'Hooks');
+            // const base13 = getAct(12) || getAct(11) || getAct(10);
             if (hasReadystock && I === 'No') plans[13] = addWorkdays(getAct(2), 1);
             else if (isboxtypecon) plans[13] = addWorkdays(getAct(2), 1);
             else if (F === 'Foam' && getAct(5)) plans[13] = addWorkdays(getAct(5), 1);
@@ -720,33 +810,67 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             else if (isTopBottom && hasInner && isScreenPrint) plans[13] = addWorkdays(getAct(12), 1);
             else if ((isTopBottom || isSlidingBox) && isOffsetFoil) plans[13] = addWorkdays(getAct(10), 1);
             else if ((isTopBottom || isSlidingBox) && isScreenPrint) plans[13] = addWorkdays(getAct(12), 1);
+
+
+
+
+
+
             if (getAct(13)) plans[14] = addWorkdays(getAct(13), 1);
             if (getAct(14)) plans[15] = addWorkdays(getAct(14), 1);
+
             if (N) plans[16] = N;
 
-            // 6. PREPARE UPDATES
+            // --- 4. DATA SYNCHRONIZATION WITH "ACTUAL" CHECK ---
             for (let s = 1; s <= 16; s++) {
                 const key = `${jobId}_${s}`;
-                const existingTask = taskMap[key];
+                const existingTask = taskMap[key]; // Check what's currently in DB
+
                 if (plans[s]) {
                     const sqlDate = plans[s].format('YYYY-MM-DD HH:mm:ss');
-                    const currentStatus = (existingTask && (existingTask.status === 'Hold' || existingTask.status === 'Completed')) ? existingTask.status : 'Pending';
+
+                    // LOGIC: If it already exists in DB and is on 'Hold', keep 'Hold'. 
+                    // Otherwise, use 'Pending'.
+                    const currentStatus = (existingTask && existingTask.status === 'Hold') ? 'Hold' : 'Pending';
+
                     taskUpdates.push([jobId, s, sqlDate, currentStatus]);
-                } else if (existingTask && !existingTask.actual) {
-                    tasksToDelete.push(existingTask.id);
+                } else {
+                    // Safety: Only delete if it exists and hasn't been completed
+                    if (existingTask && !existingTask.actual) {
+                        tasksToDelete.push(existingTask.id);
+                    }
                 }
             }
         }
 
-        // 7. EXECUTE DATABASE CHANGES
-        if (tasksToDelete.length > 0) await db.query("DELETE FROM fms_dibiaa_tasks WHERE id IN (?)", [tasksToDelete]);
+        // 5. EXECUTE DATABASE CHANGES
+        // 5. EXECUTE DATABASE CHANGES
+        if (tasksToDelete.length > 0) {
+            await db.query("DELETE FROM fms_dibiaa_tasks WHERE id IN (?)", [tasksToDelete]);
+        }
+
         if (taskUpdates.length > 0) {
-            const taskSql = `INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) VALUES ? ON DUPLICATE KEY UPDATE plan_date = IF(status = 'Completed', plan_date, VALUES(plan_date)), status = IF(status = 'Hold' OR status = 'Completed', status, VALUES(status))`;
+            const taskSql = `
+    INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) 
+    VALUES ? 
+    ON DUPLICATE KEY UPDATE 
+    plan_date = IF(status = 'Completed', plan_date, VALUES(plan_date)),
+    status = IF(status = 'Hold' OR status = 'Completed', status, VALUES(status)),
+    hold_reason = hold_reason,
+    hold_timestamp = hold_timestamp,
+    unhold_timestamp = unhold_timestamp`;
+
             await db.query(taskSql, [taskUpdates]);
         }
-        res.json({ message: "Sync Fix Applied. Job 15242 is now safely anchored by its Number, not its Row." });
-    } catch (e) { console.error(e); res.status(500).json({ error: e.message }); }
+
+        res.json({ message: `Sync Complete. Deleted ${tasksToDelete.length} obsolete tasks.` });
+
+    } catch (e) {
+        console.error("Sync Error:", e);
+        res.status(500).json({ error: e.message });
+    }
 });
+
 app.post('/fms/reset-production-job', async (req, res) => {
     const { job_number } = req.body;
 
