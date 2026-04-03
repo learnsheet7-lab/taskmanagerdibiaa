@@ -578,22 +578,22 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
         if (!auth) return res.status(500).json({ error: "Google Auth Failed" });
 
         const sheets = google.sheets({ version: 'v4', auth });
-        // Increased range limit to ensure we don't cut off newer jobs
-        const response = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `fmstask!A2:O20000` });
+        const response = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `fmstask!A2:O` });
         const rows = response.data.values;
         if (!rows || rows.length === 0) return res.json({ message: "No data found" });
 
-        // 1. UPDATE RAW DATA (Now using Job Number as the anchor)
+        // 1. PREPARE RAW DATA
         const rawValues = rows.map((r, i) => [
-            2 + i, // sheet_row_index (stored for info, not as the primary key)
-            parseToMySQLDateTime(r[0]), 
-            r[1], 
-            String(r[2]).trim(), // Job Number (Forced to string to avoid math issues)
+            2 + i, // sheet_row_index (Now just a regular number for your reference)
+            parseToMySQLDateTime(r[0]), r[1], 
+            String(r[2]).trim(), // job_number (THE UNIQUE KEY)
             r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], 
-            parseToMySQLDate(r[13]), 
-            r[14]
+            parseToMySQLDate(r[13]), r[14]
         ]);
 
+        // 2. INSERT/UPDATE RAW DATA BY JOB_NUMBER
+        // Because job_number is now UNIQUE in DB, this will find the right job 
+        // even if its sheet_row_index has changed from 641 to 640.
         const rawSql = `INSERT INTO fms_dibiaa_raw (sheet_row_index, timestamp, otd_type, job_number, order_by, company_name, box_type, box_style, box_color, printing_type, printing_color, specification, city, quantity, lead_time, repeat_new) 
                         VALUES ? 
                         ON DUPLICATE KEY UPDATE 
@@ -614,13 +614,14 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
         
         await db.query(rawSql, [rawValues]);
 
-        // 2. PREPARE MAPS (Map Job ID strictly to the Job Number String)
+        // 3. MAP JOB_ID TO JOB_NUMBER
         const [jobs] = await db.query("SELECT job_id, job_number FROM fms_dibiaa_raw");
         const jobMap = {};
         jobs.forEach(j => {
             jobMap[String(j.job_number).trim()] = j.job_id;
         });
 
+        // 4. PREPARE TASK MAP
         const [allTasks] = await db.query("SELECT id, job_id, step_id, actual_date, status FROM fms_dibiaa_tasks");
         const taskMap = {};
         allTasks.forEach(t => {
@@ -634,43 +635,30 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
         const taskUpdates = [];
         const tasksToDelete = [];
 
-        // 3. RE-EVALUATE LOGIC (Anchored by Job Number)
+        // 5. PROCESS ROWS
         for (let i = 0; i < rows.length; i++) {
             const r = rows[i];
-            const jobNumber = String(r[2]).trim(); 
-            const jobId = jobMap[jobNumber]; // Finding the ID by number, ignoring row index
+            const jobNumber = String(r[2]).trim();
+            const jobId = jobMap[jobNumber]; 
             
             if (!jobId) continue;
 
             const getAct = (s) => taskMap[`${jobId}_${s}`]?.actual || null;
-
-            const A = parseDate(r[0]);
-            const B = r[1];
-            const F = r[5];
-            const G = r[6];
-            const I = r[8];
-            const K = r[10];
-            const N = parseDate(r[13]);
-
+            const A = parseDate(r[0]), B = r[1], F = r[5], G = r[6], I = r[8], K = r[10], N = parseDate(r[13]);
             const hasInner = K && (K.toLowerCase().includes('inner print') || K.toLowerCase().includes('inner screen print'));
             const hasReadystock = K && (K.toLowerCase().includes('ready stock') || K.toLowerCase().includes('ready to stock'));
             const isOffsetFoil = (I === 'Offset Print' || I === 'Foil Print' || I === 'No');
             const isScreenPrint = (I === 'Screen print');
 
             let plans = {};
-
-            // --- ALL YOUR EXISTING PLAN LOGIC (RETAINED) ---
+            // --- YOUR STEP LOGIC (Retained exactly) ---
             if (A) plans[4] = addWorkdays(A, 3);
             const step4Act = getAct(4);
             if ((B === 'OTD' || B === 'Jewellery (OTD)') && step4Act) plans[1] = addWorkdays(step4Act, 6);
             if (B === 'OTD' || B === 'Jewellery (OTD)') plans[2] = addWorkdays(getAct(1), 1);
             else if (getAct(4)) plans[2] = addWorkdays(getAct(4), 1);
-            if (!hasReadystock && !(F === 'Paper Box' || F === 'Foam')) {
-                if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1);
-            }
-            if (!hasReadystock && !(F === 'Paper Bag' || F === 'Paper Box' || F === 'PVC Pad' || (F || '').endsWith('Tray'))) {
-                if (getAct(2)) plans[5] = addWorkdays(getAct(2), 4);
-            }
+            if (!hasReadystock && !(F === 'Paper Box' || F === 'Foam')) { if (getAct(2)) plans[3] = addWorkdays(getAct(2), 1); }
+            if (!hasReadystock && !(F === 'Paper Bag' || F === 'Paper Box' || F === 'PVC Pad' || (F || '').endsWith('Tray'))) { if (getAct(2)) plans[5] = addWorkdays(getAct(2), 4); }
             if (!hasReadystock) {
                 if (F === 'Paper Bag' && I === 'Foil Print' && getAct(7)) plans[6] = addWorkdays(getAct(7), 3);
                 else if (F !== 'Paper Bag' && I === 'Foil Print' && getAct(3)) plans[6] = addWorkdays(getAct(3), 3);
@@ -692,11 +680,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             const case2 = G === 'Magnetic' && hasInner && isOffsetFoil;
             const case3 = G === 'Magnetic' && hasInner && I === 'Screen print';
             if (getAct(8) && (case1 || case2 || case3)) plans[9] = addWorkdays(getAct(8), 1);
-            const isTopBottom = G === 'Top-Bottom';
-            const isSlidingBox = G === 'Sliding Box';
-            const isMagnetic = G === 'Magnetic';
-            const isSlidingHandle = G === 'Sliding Handle Box';
-            const isPaperBag = F === 'Paper Bag';
+            const isTopBottom = G === 'Top-Bottom', isSlidingBox = G === 'Sliding Box', isMagnetic = G === 'Magnetic', isSlidingHandle = G === 'Sliding Handle Box', isPaperBag = F === 'Paper Bag';
             let targetDate10 = null;
             if (F === 'Paper Box' && getAct(8)) targetDate10 = getAct(8);
             else if (isPaperBag && isScreenPrint) targetDate10 = getAct(12);
@@ -707,10 +691,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             else if (isTopBottom && hasInner) targetDate10 = getAct(11);
             else if (isTopBottom || isSlidingBox) targetDate10 = getAct(8);
             if (targetDate10) plans[10] = addWorkdays(targetDate10, 2);
-            const innercase1 = isTopBottom && hasInner;
-            const innercase2 = isMagnetic && hasInner && I === 'Screen print';
-            const innercase3 = isMagnetic && hasInner && isOffsetFoil;
-            const innercase4 = F === 'PVC Pad';
+            const innercase1 = isTopBottom && hasInner, innercase2 = isMagnetic && hasInner && I === 'Screen print', innercase3 = isMagnetic && hasInner && isOffsetFoil, innercase4 = F === 'PVC Pad';
             if (innercase4) plans[11] = addWorkdays(getAct(3), 1);
             else if (innercase1) plans[11] = addWorkdays(getAct(8), 1);
             else if (innercase2) plans[11] = addWorkdays(getAct(12), 1);
@@ -743,17 +724,13 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             if (getAct(14)) plans[15] = addWorkdays(getAct(14), 1);
             if (N) plans[16] = N;
 
-            // 4. PREPARE TASK UPDATES
+            // 6. PREPARE UPDATES
             for (let s = 1; s <= 16; s++) {
                 const key = `${jobId}_${s}`;
                 const existingTask = taskMap[key];
-
                 if (plans[s]) {
                     const sqlDate = plans[s].format('YYYY-MM-DD HH:mm:ss');
-                    // Ensure 'Hold' and 'Completed' status are NEVER overwritten by 'Pending'
-                    const currentStatus = (existingTask && (existingTask.status === 'Hold' || existingTask.status === 'Completed')) 
-                        ? existingTask.status : 'Pending';
-                    
+                    const currentStatus = (existingTask && (existingTask.status === 'Hold' || existingTask.status === 'Completed')) ? existingTask.status : 'Pending';
                     taskUpdates.push([jobId, s, sqlDate, currentStatus]);
                 } else if (existingTask && !existingTask.actual) {
                     tasksToDelete.push(existingTask.id);
@@ -761,28 +738,14 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
             }
         }
 
-        // 5. EXECUTE CHANGES
-        if (tasksToDelete.length > 0) {
-            await db.query("DELETE FROM fms_dibiaa_tasks WHERE id IN (?)", [tasksToDelete]);
-        }
-
+        // 7. EXECUTE DATABASE CHANGES
+        if (tasksToDelete.length > 0) await db.query("DELETE FROM fms_dibiaa_tasks WHERE id IN (?)", [tasksToDelete]);
         if (taskUpdates.length > 0) {
-            const taskSql = `
-                INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) 
-                VALUES ? 
-                ON DUPLICATE KEY UPDATE 
-                plan_date = IF(status = 'Completed', plan_date, VALUES(plan_date)),
-                status = IF(status = 'Hold' OR status = 'Completed', status, VALUES(status))`;
-
+            const taskSql = `INSERT INTO fms_dibiaa_tasks (job_id, step_id, plan_date, status) VALUES ? ON DUPLICATE KEY UPDATE plan_date = IF(status = 'Completed', plan_date, VALUES(plan_date)), status = IF(status = 'Hold' OR status = 'Completed', status, VALUES(status))`;
             await db.query(taskSql, [taskUpdates]);
         }
-
-        res.json({ message: "Sync Fix Applied. Job 15242 should now appear correctly." });
-
-    } catch (e) {
-        console.error("Sync Error:", e);
-        res.status(500).json({ error: e.message });
-    }
+        res.json({ message: "Sync Fix Applied. Job 15242 is now safely anchored by its Number, not its Row." });
+    } catch (e) { console.error(e); res.status(500).json({ error: e.message }); }
 });
 app.post('/fms/reset-production-job', async (req, res) => {
     const { job_number } = req.body;
