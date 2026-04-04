@@ -440,28 +440,42 @@ app.get('/fms/track/:job_number', async (req, res) => {
 });
 
 // 2. FMS Status Summary Report
-// 2. FMS Status Summary Report - CORRECTED DELAY LOGIC
 app.get('/fms/report-summary', async (req, res) => {
     const { start, end } = req.query;
     const sql = `
         SELECT 
             s.step_name,
             COUNT(t.id) as \`Total\`,
-            SUM(CASE WHEN t.status = 'Pending' THEN 1 ELSE 0 END) as \`Pending\`,
-            SUM(CASE WHEN t.status = 'Completed' THEN 1 ELSE 0 END) as \`Completed\`,
             SUM(CASE 
-                WHEN t.status = 'Completed' AND t.actual_date > t.plan_date THEN 1 
-                WHEN t.status = 'Pending' AND t.plan_date < NOW() THEN 1 
-                ELSE 0 
+                WHEN t.actual_date IS NULL OR t.actual_date = '' OR t.actual_date = '0000-00-00 00:00:00' 
+                THEN 1 ELSE 0 
+            END) as \`Pending\`,
+            SUM(CASE 
+                WHEN t.actual_date IS NOT NULL 
+                  AND t.actual_date != '' 
+                  AND t.actual_date != '0000-00-00 00:00:00'
+                  AND DATE(t.actual_date) <= DATE(t.plan_date) 
+                THEN 1 ELSE 0 
+            END) as \`Ontime\`,
+            SUM(CASE 
+                WHEN t.actual_date IS NOT NULL 
+                  AND t.actual_date != '' 
+                  AND t.actual_date != '0000-00-00 00:00:00'
+                  AND DATE(t.actual_date) > DATE(t.plan_date) 
+                THEN 1 ELSE 0 
             END) as \`Delayed\`
         FROM fms_dibiaa_tasks t
         JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
-        WHERE t.plan_date BETWEEN ? AND ?
+        WHERE t.plan_date >= ? AND t.plan_date <= ?
         GROUP BY s.step_id, s.step_name
         ORDER BY s.step_id ASC`;
 
     try {
-        const [rows] = await db.query(sql, [start, end]);
+        // ✅ FIX: force full day range — start at 00:00:00, end at 23:59:59
+        const from = `${start} 00:00:00`;
+        const to   = `${end} 23:59:59`;
+
+        const [rows] = await db.query(sql, [from, to]);
         res.json(rows);
     } catch (error) {
         console.error("SQL Error in FMS Report:", error);
@@ -971,55 +985,48 @@ app.post('/fms/dibiaa-complete', async (req, res) => {
 });
 
 app.get('/fms/rolling-report', async (req, res) => {
-    const { start, end, client, city, step } = req.query;
-    let params = [start, end];
-
-    // Condition 1: Step 16 (Dispatch) has a plan date.
-    // Condition 2: Step 13 (QC + Packing) Actual Date is still NULL or empty.
-    let whereClause = `
-        WHERE t.plan_date BETWEEN ? AND ? 
-        AND t.status = 'Pending'
-        AND EXISTS (
-            SELECT 1 FROM fms_dibiaa_tasks 
-            WHERE job_id = t.job_id 
-            AND step_id = 16 
-            AND plan_date IS NOT NULL
-        )
-        AND EXISTS (
-            SELECT 1 FROM fms_dibiaa_tasks 
-            WHERE job_id = t.job_id 
-            AND step_id = 13 
-            AND (actual_date IS NULL OR actual_date = '')
-        )
-    `;
-
-    if (client) { whereClause += " AND r.company_name = ?"; params.push(client); }
-    if (city) { whereClause += " AND r.city = ?"; params.push(city); }
-    if (step) { whereClause += " AND s.step_name = ?"; params.push(step); }
-
-    const sql = `
-        SELECT 
-            r.job_number, r.order_by, s.step_name, t.plan_date, 
-            r.company_name, r.box_type, r.quantity, r.city,
-            DATEDIFF(NOW(), t.plan_date) as delay_val
-        FROM fms_dibiaa_tasks t
-        JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
-        JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
-        ${whereClause}
-        ORDER BY t.plan_date ASC`;
-
     try {
-        const [rows] = await db.query(sql, params);
+        const sql = `
+            SELECT 
+                r.job_number, 
+                r.order_by, 
+                s.step_name, 
+                s.step_id,
+                t.plan_date, 
+                t.actual_date,
+                r.company_name, 
+                r.quantity, 
+                r.city
+            FROM fms_dibiaa_tasks t
+            JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
+            JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
+            WHERE t.step_id >= 1
+              AND t.step_id <= 13
+              AND t.plan_date IS NOT NULL
+              AND t.plan_date > '1000-01-01'
+              AND (t.actual_date IS NULL OR t.actual_date = '' OR t.actual_date = '0000-00-00 00:00:00')
+            ORDER BY t.plan_date ASC`;
 
-        const stats = {
-            uniqueClients: new Set(rows.map(r => r.company_name)).size,
-            totalJobs: rows.length,
-            totalQty: rows.reduce((acc, curr) => acc + (Number(curr.quantity) || 0), 0)
-        };
+        const [rows] = await db.query(sql);
 
-        res.json({ data: rows, stats });
+        // Calculate stats
+        const uniqueJobs = [...new Set(rows.map(r => r.job_number))];
+        const uniqueClients = [...new Set(rows.map(r => r.company_name))];
+        const totalQty = rows.reduce((acc, curr, idx, self) => {
+            const isFirst = self.findIndex(t => t.job_number === curr.job_number) === idx;
+            return isFirst ? acc + (Number(curr.quantity) || 0) : acc;
+        }, 0);
+
+        res.json({
+            data: rows,
+            stats: {
+                totalJobs: uniqueJobs.length,
+                uniqueClients: uniqueClients.length,
+                totalQty
+            }
+        });
     } catch (error) {
-        console.error("Rolling Report Error:", error.message);
+        console.error("Rolling Report Error:", error);
         res.status(500).json({ error: error.message });
     }
 });
