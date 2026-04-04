@@ -5,7 +5,7 @@ const cors = require('cors');
 const dayjs = require('dayjs');
 const customParseFormat = require('dayjs/plugin/customParseFormat');
 const timezone = require('dayjs/plugin/timezone'); // Add this
-const utc = require('dayjs/plugin/utc');   
+const utc = require('dayjs/plugin/utc');
 const axios = require('axios');        // Add this
 
 dayjs.extend(customParseFormat);
@@ -112,7 +112,7 @@ const addWorkdays = (startDate, days) => {
 //key_3UoCIEFWON
 const sendWhatsApp = async (mobile, templateName, variables) => {
     if (!mobile || mobile.length < 10) return;
-    
+
     // Clean the mobile number: remove any non-numeric characters
     const cleanMobile = mobile.replace(/\D/g, '');
     const formattedMobile = cleanMobile.startsWith('91') ? cleanMobile : `91${cleanMobile}`;
@@ -120,7 +120,7 @@ const sendWhatsApp = async (mobile, templateName, variables) => {
     const data = {
         "messages": [
             {
-                "from": "919910690691", 
+                "from": "919910690691",
                 "to": formattedMobile, // REMOVED the "+" sign here
                 "content": {
                     "templateName": templateName,
@@ -139,7 +139,7 @@ const sendWhatsApp = async (mobile, templateName, variables) => {
         const response = await axios({
             method: 'post',
             url: 'https://public.doubletick.io/whatsapp/message/template',
-            headers: { 
+            headers: {
                 'Authorization': 'key_3UoCIEFWON',
                 'Content-Type': 'application/json'
             },
@@ -148,7 +148,7 @@ const sendWhatsApp = async (mobile, templateName, variables) => {
 
         // This will print the DoubleTick Message ID or a failure reason
         console.log("DoubleTick Response:", JSON.stringify(response.data, null, 2));
-        
+
     } catch (error) {
         // This will tell you if the template name is wrong or variables count is wrong
         console.error("DoubleTick Error Detail:", error.response?.data || error.message);
@@ -319,11 +319,11 @@ app.get('/checklist/:email/:role', async (req, res) => {
 app.put('/checklist/complete', async (req, res) => { await db.query("UPDATE checklist_tasks SET status='Completed', completed_at=NOW() WHERE id=?", [req.body.id]); res.json({ message: "Done" }); });
 
 // --- TASKS MODULE ---
-app.post('/tasks', async (req, res) => { 
+app.post('/tasks', async (req, res) => {
     const { employee_name, email, approver_email, description, target_date, priority, approval_needed, assigned_by, remarks } = req.body;
-    
+
     // 1. Insert into Database
-    await db.query("INSERT INTO tasks (task_uid,employee_name,assigned_to_email,approver_email,description,target_date,priority,approval_needed,assigned_by,remarks,status,previous_status) VALUES (?,?,?,?,?,?,?,?,?,?,'Pending','Pending')", 
+    await db.query("INSERT INTO tasks (task_uid,employee_name,assigned_to_email,approver_email,description,target_date,priority,approval_needed,assigned_by,remarks,status,previous_status) VALUES (?,?,?,?,?,?,?,?,?,?,'Pending','Pending')",
         ['T-' + Math.floor(Math.random() * 9000), employee_name, email, approver_email, description, target_date, priority, approval_needed, assigned_by || 'System', remarks || '']
     );
 
@@ -331,8 +331,8 @@ app.post('/tasks', async (req, res) => {
     try {
         const [userRow] = await db.query("SELECT mobile FROM users WHERE email = ?", [email]);
         // Add this inside your post route temporarily to test
-const testVars = ["Farhaan", "Fix the Sync Issue", "22-03-2026", "High"];
-sendWhatsApp("7048462595", "delegation_1", testVars);
+        const testVars = ["Farhaan", "Fix the Sync Issue", "22-03-2026", "High"];
+        sendWhatsApp("7048462595", "delegation_1", testVars);
         if (userRow.length > 0 && userRow[0].mobile) {
             // {{1}} Name, {{2}} Desc, {{3}} Date, {{4}} Priority
             const vars = [employee_name, description, dayjs(target_date).format('DD/MM/YYYY'), priority];
@@ -340,7 +340,7 @@ sendWhatsApp("7048462595", "delegation_1", testVars);
         }
     } catch (e) { console.error("WhatsApp Error:", e); }
 
-    res.json({ message: "Delegated" }); 
+    res.json({ message: "Delegated" });
 });
 app.get('/tasks/:email/:role', async (req, res) => { const q = req.params.role === 'Admin' ? "SELECT * FROM tasks ORDER BY created_at DESC" : "SELECT * FROM tasks WHERE assigned_to_email=? ORDER BY created_at DESC"; const [r] = await db.query(q, [req.params.email]); res.json(r); });
 app.delete('/tasks/:id', async (req, res) => { await db.query("DELETE FROM tasks WHERE id=?", [req.params.id]); res.json({ message: "Deleted" }); });
@@ -356,7 +356,7 @@ app.put('/tasks/update-status', async (req, res) => {
         // 2. Handle Rejection (Revision Requested -> Back to previous)
         if (is_rejection) {
             await db.query(`UPDATE tasks SET status = CASE WHEN previous_status IS NULL OR previous_status='' OR previous_status='Waiting Approval' THEN 'Pending' ELSE previous_status END, completed_at = NULL WHERE id=?`, [id]);
-            
+
             if (task.status === 'Revision Requested') {
                 const [doer] = await db.query("SELECT mobile FROM users WHERE email = ?", [task.assigned_to_email]);
                 if (doer[0]?.mobile) {
@@ -368,7 +368,7 @@ app.put('/tasks/update-status', async (req, res) => {
         // 3. Handle New Revision Request
         else if (status === 'Revision Requested') {
             await db.query("UPDATE tasks SET previous_status=status, status=?, revised_date_request=?, revision_remarks=? WHERE id=?", [status, revised_date, remarks, id]);
-            
+
             const [admins] = await db.query("SELECT mobile, name FROM users WHERE role = 'Admin'");
             admins.forEach(admin => {
                 if (admin.mobile) {
@@ -380,7 +380,7 @@ app.put('/tasks/update-status', async (req, res) => {
         // 4. Handle Admin Approving Revision
         else if (status === 'Revised') {
             await db.query("UPDATE tasks SET status='Revised', target_date=revised_date_request WHERE id=?", [id]);
-            
+
             const [doer] = await db.query("SELECT mobile FROM users WHERE email = ?", [task.assigned_to_email]);
             if (doer[0]?.mobile) {
                 const vars = [task.employee_name, task.description, dayjs(task.target_date).format('DD/MM/YYYY'), dayjs(task.revised_date_request).format('DD/MM/YYYY'), 'Approved'];
@@ -400,7 +400,7 @@ app.put('/tasks/update-status', async (req, res) => {
         // 7. General Status Updates (Completed, Waiting Approval, etc.)
         else {
             await db.query(`UPDATE tasks SET previous_status = status, status = ?, completed_at = CASE WHEN ? = 'Completed' THEN NOW() ELSE NULL END WHERE id = ?`, [status, status, id]);
-            
+
             if (status === 'Completed' || status === 'Waiting Approval') {
                 const [assignee] = await db.query("SELECT mobile, name FROM users WHERE name = ?", [task.assigned_by]);
                 if (assignee[0]?.mobile) {
@@ -473,7 +473,7 @@ app.get('/fms/report-summary', async (req, res) => {
     try {
         // ✅ FIX: force full day range — start at 00:00:00, end at 23:59:59
         const from = `${start} 00:00:00`;
-        const to   = `${end} 23:59:59`;
+        const to = `${end} 23:59:59`;
 
         const [rows] = await db.query(sql, [from, to]);
         res.json(rows);
@@ -991,12 +991,20 @@ app.get('/fms/rolling-report', async (req, res) => {
                 r.job_number, 
                 r.order_by, 
                 s.step_name, 
-                s.step_id,
                 t.plan_date, 
                 t.actual_date,
+                t.step_id,
                 r.company_name, 
                 r.quantity, 
-                r.city
+                r.city,
+                -- Step 16 plan_date = Deadline for this job
+                (
+                    SELECT t16.plan_date 
+                    FROM fms_dibiaa_tasks t16 
+                    WHERE t16.job_id = t.job_id 
+                      AND t16.step_id = 16 
+                    LIMIT 1
+                ) AS deadline_date
             FROM fms_dibiaa_tasks t
             JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
             JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
@@ -1005,11 +1013,10 @@ app.get('/fms/rolling-report', async (req, res) => {
               AND t.plan_date IS NOT NULL
               AND t.plan_date > '1000-01-01'
               AND (t.actual_date IS NULL OR t.actual_date = '' OR t.actual_date = '0000-00-00 00:00:00')
-            ORDER BY t.plan_date ASC`;
+            ORDER BY deadline_date ASC, t.plan_date ASC`;
 
         const [rows] = await db.query(sql);
 
-        // Calculate stats
         const uniqueJobs = [...new Set(rows.map(r => r.job_number))];
         const uniqueClients = [...new Set(rows.map(r => r.company_name))];
         const totalQty = rows.reduce((acc, curr, idx, self) => {
@@ -1019,11 +1026,7 @@ app.get('/fms/rolling-report', async (req, res) => {
 
         res.json({
             data: rows,
-            stats: {
-                totalJobs: uniqueJobs.length,
-                uniqueClients: uniqueClients.length,
-                totalQty
-            }
+            stats: { totalJobs: uniqueJobs.length, uniqueClients: uniqueClients.length, totalQty }
         });
     } catch (error) {
         console.error("Rolling Report Error:", error);
@@ -1402,12 +1405,12 @@ app.get('/fms/logs', async (req, res) => {
             LEFT JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
             LEFT JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
             ORDER BY t.actual_date DESC`;
-            
+
         const [rows] = await db.query(sql);
         res.json(rows);
-    } catch (e) { 
-        console.error("SQL Error:", e.message); 
-        res.status(500).json({ error: e.message }); 
+    } catch (e) {
+        console.error("SQL Error:", e.message);
+        res.status(500).json({ error: e.message });
     }
 });
 
@@ -1435,11 +1438,11 @@ app.get('/fms/contractor-logs', async (req, res) => {
               AND t_assign.custom_field_1 IS NOT NULL 
               AND t_assign.custom_field_1 != '---'
             ORDER BY t_work.plan_date DESC`;
-            
+
         const [rows] = await db.query(sql);
         res.json(rows);
-    } catch (e) { 
-        res.status(500).json({ error: e.message }); 
+    } catch (e) {
+        res.status(500).json({ error: e.message });
     }
 });
 
@@ -1463,11 +1466,11 @@ app.get('/fms/printer-logs', async (req, res) => {
               AND t.custom_field_1 IS NOT NULL 
               AND t.custom_field_1 != '---'
             ORDER BY t.actual_date DESC`;
-            
+
         const [rows] = await db.query(sql);
         res.json(rows);
-    } catch (e) { 
-        res.status(500).json({ error: e.message }); 
+    } catch (e) {
+        res.status(500).json({ error: e.message });
     }
 });
 
@@ -1605,7 +1608,7 @@ app.post('/fms/reset-job', async (req, res) => {
 app.post('/fms/toggle-hold', async (req, res) => {
     const { job_number, action, reason } = req.body;
     const newStatus = action === 'Hold' ? 'Hold' : 'Pending';
-    
+
     // FORCE IST TIMEZONE
     const nowIST = dayjs().tz("Asia/Kolkata").format('YYYY-MM-DD HH:mm:ss');
 
