@@ -911,36 +911,79 @@ app.post('/fms/reset-production-job', async (req, res) => {
     }
 });
 
+// Mapping: contractor login email -> contractor name(s) assigned in Step 8
+const CONTRACTOR_EMAIL_MAP = {
+    'buntymahor1985@gmail.com': ['Team DIBIAA', 'Bunty ji'],
+    'shahajadali9126@gmail.com': ['Shahjad ji'],
+    'faizanansari98056@gmail.com': ['Afroz ji'],
+    'pkumar8000072593@gmail.com': ['Pawan ji'],
+    'rajkumar70793023@gmail.com': ['Rajkumar ji']
+};
+
 app.get('/fms/dibiaa-tasks', async (req, res) => {
     try {
         const { email, role } = req.query;
         const [configs] = await db.query("SELECT * FROM fms_dibiaa_steps_config");
 
-        const relevantSteps = role === 'Admin'
-            ? configs
-            : configs.filter(c => c.doer_emails && c.doer_emails.includes(email));
+        const normalizedEmail = (email || '').toLowerCase().trim();
+        const contractorNames = CONTRACTOR_EMAIL_MAP[normalizedEmail];
+        const isContractor = !!contractorNames;
+
+        let relevantSteps;
+        if (role === 'Admin') {
+            relevantSteps = configs;
+        } else if (isContractor) {
+            // Contractors only see Step 9 and Step 10
+            relevantSteps = configs.filter(c => c.step_id === 9 || c.step_id === 10);
+        } else {
+            relevantSteps = configs.filter(c => c.doer_emails && c.doer_emails.includes(email));
+        }
 
         const stepIds = relevantSteps.map(s => s.step_id);
         if (stepIds.length === 0) return res.json({});
 
         // CRITICAL CHANGE: We JOIN tasks (t) with raw (r) using job_id
-        const [tasks] = await db.query(`
-    SELECT 
-        t.*, 
-        r.job_number, r.company_name, r.box_type, r.quantity as total_qty, 
-        r.timestamp, r.otd_type, r.order_by, r.box_style, r.box_color, 
-        r.printing_type, r.printing_color, r.specification, r.city, 
+        let tasks;
+        if (isContractor) {
+            // For contractor logins: filter Step 9/10 tasks by their contractor name from Step 8
+            [tasks] = await db.query(`
+    SELECT
+        t.*,
+        r.job_number, r.company_name, r.box_type, r.quantity as total_qty,
+        r.timestamp, r.otd_type, r.order_by, r.box_style, r.box_color,
+        r.printing_type, r.printing_color, r.specification, r.city,
         r.lead_time, r.repeat_new,
         s.step_name, s.visible_columns,
         -- Fetch the contractor name saved in Step 8 for this Job ID
         (SELECT custom_field_1 FROM fms_dibiaa_tasks WHERE job_id = t.job_id AND step_id = 8 LIMIT 1) as step8_contractor,
         (SELECT custom_field_1 FROM fms_dibiaa_tasks WHERE job_id = t.job_id AND (custom_field_1 IS NOT NULL AND custom_field_1 != '') ORDER BY actual_date DESC LIMIT 1) as latest_worker,
         (SELECT custom_field_2 FROM fms_dibiaa_tasks WHERE job_id = t.job_id AND (custom_field_2 IS NOT NULL AND custom_field_2 != '') ORDER BY actual_date DESC LIMIT 1) as latest_qty
-    FROM fms_dibiaa_tasks t 
-    JOIN fms_dibiaa_raw r ON t.job_id = r.job_id 
-    JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id 
+    FROM fms_dibiaa_tasks t
+    JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
+    JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
+    WHERE (t.status = 'Pending' OR t.status = 'Hold')
+      AND t.step_id IN (?)
+      AND (SELECT custom_field_1 FROM fms_dibiaa_tasks WHERE job_id = t.job_id AND step_id = 8 LIMIT 1) IN (?)
+    ORDER BY t.plan_date ASC`, [stepIds, contractorNames]);
+        } else {
+            [tasks] = await db.query(`
+    SELECT
+        t.*,
+        r.job_number, r.company_name, r.box_type, r.quantity as total_qty,
+        r.timestamp, r.otd_type, r.order_by, r.box_style, r.box_color,
+        r.printing_type, r.printing_color, r.specification, r.city,
+        r.lead_time, r.repeat_new,
+        s.step_name, s.visible_columns,
+        -- Fetch the contractor name saved in Step 8 for this Job ID
+        (SELECT custom_field_1 FROM fms_dibiaa_tasks WHERE job_id = t.job_id AND step_id = 8 LIMIT 1) as step8_contractor,
+        (SELECT custom_field_1 FROM fms_dibiaa_tasks WHERE job_id = t.job_id AND (custom_field_1 IS NOT NULL AND custom_field_1 != '') ORDER BY actual_date DESC LIMIT 1) as latest_worker,
+        (SELECT custom_field_2 FROM fms_dibiaa_tasks WHERE job_id = t.job_id AND (custom_field_2 IS NOT NULL AND custom_field_2 != '') ORDER BY actual_date DESC LIMIT 1) as latest_qty
+    FROM fms_dibiaa_tasks t
+    JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
+    JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
     WHERE (t.status = 'Pending' OR t.status = 'Hold') AND t.step_id IN (?)
     ORDER BY t.plan_date ASC`, [stepIds]);
+        }
 
         const grouped = {};
         relevantSteps.forEach(s => {
@@ -1435,7 +1478,8 @@ app.get('/fms/contractor-logs', async (req, res) => {
             INNER JOIN fms_dibiaa_steps_config s ON t_work.step_id = s.step_id
             /* Focus only on the work steps */
             WHERE t_work.step_id IN (9, 10)
-              AND t_assign.custom_field_1 IS NOT NULL 
+              AND t_work.status != 'Cancelled'
+              AND t_assign.custom_field_1 IS NOT NULL
               AND t_assign.custom_field_1 != '---'
             ORDER BY t_work.plan_date DESC`;
 
@@ -1639,6 +1683,130 @@ app.post('/fms/toggle-hold', async (req, res) => {
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
+});
+
+// Route to Cancel / Revert a job
+app.post('/fms/cancel-job', async (req, res) => {
+    const { job_number, action } = req.body;
+    try {
+        if (action === 'Cancel') {
+            const sql = `
+                UPDATE fms_dibiaa_tasks t
+                JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
+                SET t.status = 'Cancelled'
+                WHERE r.job_number = ? AND (t.status = 'Pending' OR t.status = 'Hold')
+            `;
+            await db.query(sql, [job_number]);
+            res.json({ message: `Job ${job_number} has been Cancelled.` });
+        } else {
+            // Revert: restore all Cancelled tasks back to Pending
+            const sql = `
+                UPDATE fms_dibiaa_tasks t
+                JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
+                SET t.status = 'Pending'
+                WHERE r.job_number = ? AND t.status = 'Cancelled'
+            `;
+            await db.query(sql, [job_number]);
+            res.json({ message: `Job ${job_number} has been Reverted to Pending.` });
+        }
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Route to get list of all cancelled jobs
+app.get('/fms/cancelled-jobs', async (req, res) => {
+    try {
+        const [rows] = await db.query(`
+            SELECT DISTINCT r.job_number, r.company_name
+            FROM fms_dibiaa_tasks t
+            JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
+            WHERE t.status = 'Cancelled'
+            ORDER BY r.job_number DESC
+        `);
+        res.json(rows);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// ── DAYWISE REPORT ──────────────────────────────────────────────────────────
+app.get('/fms/daywise-report', async (req, res) => {
+    const { start, end } = req.query;
+    try {
+        const [rows] = await db.query(`
+            SELECT
+                r.job_number,
+                r.company_name,
+                r.quantity,
+                r.timestamp          AS order_date,
+                r.otd_type,
+                t4.actual_date       AS logo_actual_date,
+                t13.actual_date      AS packing_actual_date,
+                t16.plan_date        AS dispatch_plan_date,
+                t16.actual_date      AS dispatch_actual_date
+            FROM fms_dibiaa_raw r
+            LEFT JOIN fms_dibiaa_tasks t4  ON r.job_id = t4.job_id  AND t4.step_id  = 4
+            LEFT JOIN fms_dibiaa_tasks t13 ON r.job_id = t13.job_id AND t13.step_id = 13
+            LEFT JOIN fms_dibiaa_tasks t16 ON r.job_id = t16.job_id AND t16.step_id = 16
+            WHERE t16.plan_date IS NOT NULL
+              AND t16.plan_date != ''
+              AND t16.plan_date != '0000-00-00 00:00:00'
+              AND DATE(t16.plan_date) BETWEEN ? AND ?
+            ORDER BY r.company_name, t16.plan_date, r.job_number
+        `, [start, end]);
+        res.json(rows);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── ORDER WISE SUMMARY ───────────────────────────────────────────────────────
+app.get('/fms/order-summary', async (req, res) => {
+    const { start, end } = req.query;
+    try {
+        const [rows] = await db.query(`
+            SELECT
+                r.job_number,
+                r.company_name,
+                r.quantity                  AS total_qty,
+                r.timestamp                 AS order_date,
+                t13.actual_date             AS packing_actual_date
+            FROM fms_dibiaa_raw r
+            LEFT JOIN fms_dibiaa_tasks t13 ON r.job_id = t13.job_id AND t13.step_id = 13
+            WHERE r.timestamp IS NOT NULL
+              AND r.timestamp != ''
+              AND r.timestamp != '0000-00-00 00:00:00'
+              AND DATE(r.timestamp) BETWEEN ? AND ?
+            ORDER BY r.timestamp
+        `, [start, end]);
+        res.json(rows);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── PACKING SUMMARY ──────────────────────────────────────────────────────────
+app.get('/fms/packing-summary', async (req, res) => {
+    const { start, end } = req.query;
+    try {
+        const [rows] = await db.query(`
+            SELECT
+                r.otd_type,
+                r.box_type,
+                r.box_style,
+                r.printing_type,
+                r.job_number,
+                r.company_name,
+                r.quantity                 AS packed_qty,
+                t13.actual_date            AS packing_actual_date
+            FROM fms_dibiaa_tasks t13
+            JOIN fms_dibiaa_raw r ON t13.job_id = r.job_id
+            WHERE t13.step_id = 13
+              AND t13.actual_date IS NOT NULL
+              AND t13.actual_date != ''
+              AND t13.actual_date != '0000-00-00 00:00:00'
+              AND DATE(t13.actual_date) BETWEEN ? AND ?
+            ORDER BY r.otd_type, r.job_number
+        `, [start, end]);
+        res.json(rows);
+    } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Endpoint for Checklist Detail Popup
