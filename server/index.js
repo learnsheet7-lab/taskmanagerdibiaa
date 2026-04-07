@@ -1749,11 +1749,11 @@ app.get('/fms/daywise-report', async (req, res) => {
             LEFT JOIN fms_dibiaa_tasks t4  ON r.job_id = t4.job_id  AND t4.step_id  = 4
             LEFT JOIN fms_dibiaa_tasks t13 ON r.job_id = t13.job_id AND t13.step_id = 13
             LEFT JOIN fms_dibiaa_tasks t16 ON r.job_id = t16.job_id AND t16.step_id = 16
-            WHERE t16.plan_date IS NOT NULL
-              AND t16.plan_date != ''
-              AND t16.plan_date != '0000-00-00 00:00:00'
-              AND DATE(t16.plan_date) BETWEEN ? AND ?
-            ORDER BY r.company_name, t16.plan_date, r.job_number
+            WHERE t16.actual_date IS NOT NULL
+              AND t16.actual_date != ''
+              AND t16.actual_date != '0000-00-00 00:00:00'
+              AND DATE(t16.actual_date) BETWEEN ? AND ?
+            ORDER BY r.company_name, t16.actual_date, r.job_number
         `, [start, end]);
         res.json(rows);
     } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1795,9 +1795,11 @@ app.get('/fms/packing-summary', async (req, res) => {
                 r.job_number,
                 r.company_name,
                 r.quantity                 AS packed_qty,
+                t4.actual_date             AS logo_actual_date,
                 t13.actual_date            AS packing_actual_date
             FROM fms_dibiaa_tasks t13
             JOIN fms_dibiaa_raw r ON t13.job_id = r.job_id
+            LEFT JOIN fms_dibiaa_tasks t4 ON r.job_id = t4.job_id AND t4.step_id = 4
             WHERE t13.step_id = 13
               AND t13.actual_date IS NOT NULL
               AND t13.actual_date != ''
