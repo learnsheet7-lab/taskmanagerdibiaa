@@ -586,6 +586,139 @@ app.get('/mis/report', async (req, res) => {
     res.json(rows);
 });
 
+app.get('/performance/leaderboard', async (req, res) => {
+    try {
+        const today = dayjs().format('YYYY-MM-DD');
+        const { start, end } = req.query;
+
+        // Date range for delegation & FMS: use provided range, else all-time
+        const delDateFilter = (start && end) ? `AND target_date BETWEEN '${start}' AND '${end}'` : '';
+        const fmsDateFilter = (start && end) ? `AND plan_date BETWEEN '${start}' AND '${end} 23:59:59'` : '';
+        // Checklist: never count upcoming tasks (target_date <= today), plus optional range
+        const chkDateFilter = (start && end)
+            ? `AND target_date BETWEEN '${start}' AND '${end}'`
+            : `AND target_date <= '${today}'`;
+
+        const [users] = await db.query("SELECT id, name, email FROM users WHERE role != 'Admin'");
+
+        const [delRows] = await db.query(`
+            SELECT assigned_to_email as email,
+                COUNT(*) as total,
+                SUM(CASE WHEN status='Completed' THEN 1 ELSE 0 END) as completed,
+                SUM(CASE WHEN status NOT IN ('Completed') AND target_date < '${today}' THEN 1 ELSE 0 END) as delayed
+            FROM tasks WHERE 1=1 ${delDateFilter} GROUP BY assigned_to_email
+        `);
+
+        const [chkRows] = await db.query(`
+            SELECT employee_email as email,
+                COUNT(*) as total,
+                SUM(CASE WHEN status='Completed' THEN 1 ELSE 0 END) as completed,
+                SUM(CASE WHEN status != 'Completed' AND target_date < '${today}' THEN 1 ELSE 0 END) as delayed
+            FROM checklist_tasks WHERE 1=1 ${chkDateFilter} GROUP BY employee_email
+        `);
+
+        const [fmsTasks] = await db.query(`
+            SELECT step_id, status,
+                CASE WHEN status != 'Completed' AND plan_date < NOW() THEN 1 ELSE 0 END as is_delayed
+            FROM fms_dibiaa_tasks WHERE 1=1 ${fmsDateFilter}
+        `);
+        const [stepConfigs] = await db.query("SELECT step_id, doer_emails FROM fms_dibiaa_steps_config");
+
+        const stepDoerMap = {};
+        stepConfigs.forEach(s => {
+            if (s.doer_emails) stepDoerMap[s.step_id] = s.doer_emails.split(',').map(e => e.trim()).filter(Boolean);
+        });
+
+        const fmsMap = {};
+        fmsTasks.forEach(task => {
+            (stepDoerMap[task.step_id] || []).forEach(email => {
+                if (!fmsMap[email]) fmsMap[email] = { total: 0, completed: 0, delayed: 0 };
+                fmsMap[email].total++;
+                if (task.status === 'Completed') fmsMap[email].completed++;
+                if (task.is_delayed) fmsMap[email].delayed++;
+            });
+        });
+
+        const delMap = {}, chkMap = {};
+        delRows.forEach(r => { delMap[r.email] = r; });
+        chkRows.forEach(r => { chkMap[r.email] = r; });
+
+        const result = users.map(u => ({
+            name: u.name,
+            email: u.email,
+            delegation: { completed: Number(delMap[u.email]?.completed || 0), total: Number(delMap[u.email]?.total || 0), delayed: Number(delMap[u.email]?.delayed || 0) },
+            checklist:  { completed: Number(chkMap[u.email]?.completed  || 0), total: Number(chkMap[u.email]?.total  || 0), delayed: Number(chkMap[u.email]?.delayed  || 0) },
+            fms:        { completed: Number(fmsMap[u.email]?.completed  || 0), total: Number(fmsMap[u.email]?.total  || 0), delayed: Number(fmsMap[u.email]?.delayed  || 0) }
+        })).filter(u => u.delegation.total > 0 || u.checklist.total > 0 || u.fms.total > 0);
+
+        res.json(result);
+    } catch (err) {
+        console.error("Leaderboard Error:", err);
+        res.status(500).json({ error: "Server error" });
+    }
+});
+
+app.get('/performance/tasks', async (req, res) => {
+    try {
+        const { email, category, start, end } = req.query;
+        if (!email || !category) return res.json([]);
+        const today = dayjs().format('YYYY-MM-DD');
+
+        if (category === 'delegation') {
+            const dateFilter = (start && end) ? `AND target_date BETWEEN ? AND ?` : '';
+            const params = start && end ? [email, start, end] : [email];
+            const [rows] = await db.query(
+                `SELECT id, description, status, target_date, priority,
+                    CASE WHEN status NOT IN ('Completed') AND target_date < '${today}' THEN 1 ELSE 0 END as is_delayed
+                FROM tasks WHERE assigned_to_email = ? ${dateFilter} ORDER BY target_date ASC`,
+                params
+            );
+            return res.json(rows);
+        }
+
+        if (category === 'checklist') {
+            const dateFilter = (start && end) ? `AND target_date BETWEEN ? AND ?` : `AND target_date <= '${today}'`;
+            const params = start && end ? [email, start, end] : [email];
+            const [rows] = await db.query(
+                `SELECT id, description, status, target_date, NULL as priority,
+                    CASE WHEN status != 'Completed' AND target_date < '${today}' THEN 1 ELSE 0 END as is_delayed
+                FROM checklist_tasks WHERE employee_email = ? ${dateFilter} ORDER BY target_date ASC`,
+                params
+            );
+            return res.json(rows);
+        }
+
+        if (category === 'fms') {
+            const [steps] = await db.query(
+                "SELECT step_id FROM fms_dibiaa_steps_config WHERE doer_emails LIKE ?",
+                [`%${email}%`]
+            );
+            if (steps.length === 0) return res.json([]);
+            const stepIds = steps.map(s => s.step_id);
+            const dateFilter = (start && end) ? `AND t.plan_date BETWEEN ? AND ?` : '';
+            const params = start && end ? [stepIds, start, `${end} 23:59:59`] : [stepIds];
+            const [rows] = await db.query(
+                `SELECT t.id,
+                    CONCAT('#', COALESCE(r.job_number,'?'), ' - ', COALESCE(r.company_name,'Unknown')) as description,
+                    COALESCE(s.step_name, 'Unknown Step') as priority,
+                    t.plan_date as target_date, t.status,
+                    CASE WHEN t.status != 'Completed' AND t.plan_date < NOW() THEN 1 ELSE 0 END as is_delayed
+                FROM fms_dibiaa_tasks t
+                LEFT JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
+                LEFT JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
+                WHERE t.step_id IN (?) ${dateFilter} ORDER BY t.plan_date ASC`,
+                params
+            );
+            return res.json(rows);
+        }
+
+        res.json([]);
+    } catch (err) {
+        console.error("Performance Tasks Error:", err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.post('/fms/sync-dibiaa', async (req, res) => {
     try {
         const SHEET_ID = '1C3qHR_jbjHgOQCM7MwRB4AZXtuY2W9jLpqIAEbYFWkQ';
