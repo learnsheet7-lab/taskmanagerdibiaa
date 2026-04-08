@@ -1736,6 +1736,51 @@ app.post('/mis/fms-plan', async (req, res) => {
 
 // ────────────────────────────────────────────────────────────────────────────
 
+// Hold/Unhold Report
+app.get('/fms/hold-report', async (req, res) => {
+    try {
+        const { step_id, job_number } = req.query;
+        let where = 'WHERE t.hold_timestamp IS NOT NULL';
+        const params = [];
+        if (step_id)   { where += ' AND t.step_id = ?';          params.push(step_id); }
+        if (job_number){ where += ' AND r.job_number LIKE ?';     params.push(`%${job_number}%`); }
+
+        const [rows] = await dbQuery(`
+            SELECT
+                r.job_number,
+                r.company_name,
+                s.step_name,
+                t.step_id,
+                t.status,
+                t.hold_reason,
+                t.hold_timestamp,
+                t.unhold_timestamp,
+                ROUND(
+                    TIMESTAMPDIFF(MINUTE, t.hold_timestamp, COALESCE(t.unhold_timestamp, NOW())) / 1440.0
+                , 1) AS hold_days
+            FROM fms_dibiaa_tasks t
+            LEFT JOIN fms_dibiaa_raw r           ON t.job_id  = r.job_id
+            LEFT JOIN fms_dibiaa_steps_config s  ON t.step_id = s.step_id
+            ${where}
+            ORDER BY t.hold_timestamp DESC
+        `, params);
+
+        // Also return distinct steps for the filter dropdown
+        const [steps] = await dbQuery(
+            `SELECT DISTINCT t.step_id, s.step_name
+             FROM fms_dibiaa_tasks t
+             LEFT JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
+             WHERE t.hold_timestamp IS NOT NULL
+             ORDER BY t.step_id`
+        );
+
+        res.json({ rows, steps });
+    } catch (err) {
+        console.error('Hold Report Error:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // 1. Fetch All Logs for Admin
 app.get('/fms/logs', async (req, res) => {
     try {
