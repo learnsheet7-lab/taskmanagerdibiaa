@@ -235,11 +235,12 @@ app.get('/dashboard/:email/:role', async (req, res) => {
             db.query(`SELECT * FROM tasks WHERE ${base} AND target_date <= '${todayStr}' AND status!='Completed' ORDER BY target_date ASC`),
             db.query(`SELECT id, description, employee_name, target_date, status FROM checklist_tasks WHERE ${chkBase} AND target_date <= '${todayStr}' AND status='Pending' ORDER BY target_date ASC`),
             db.query(`
-                SELECT t.id, t.plan_date, r.job_number, r.company_name, r.order_by, s.step_name 
-                FROM fms_dibiaa_tasks t 
-                JOIN fms_dibiaa_raw r ON t.job_id = r.job_id 
+                SELECT t.id, t.step_id, t.plan_date, r.job_number, r.company_name, r.order_by, r.box_style, s.step_name,
+                    (SELECT custom_field_1 FROM fms_dibiaa_tasks WHERE job_id = t.job_id AND step_id = 8 LIMIT 1) as step8_contractor
+                FROM fms_dibiaa_tasks t
+                JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
                 JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
-                WHERE t.status='Pending' AND t.plan_date <= '${endOfToday}' 
+                WHERE t.status='Pending' AND t.plan_date <= '${endOfToday}'
                 ${fmsStepFilter}
                 ORDER BY t.plan_date ASC
             `)
@@ -863,7 +864,7 @@ app.post('/fms/sync-dibiaa', async (req, res) => {
                 else if (F === 'Paper Box' && getAct(2)) {
                     plans[7] = addWorkdays(getAct(2), 3);
                 } else if (I === 'Foil Print' && F === 'Paper Bag' && getAct(3)) {
-                    plans[7] = addWorkdays(getAct(3), 3);
+                    plans[7] = addWorkdays(getAct(3), 5);
                 }
                 else if (F !== 'PVC Pad' && I !== 'Foil Print' && getAct(3)) {
                     plans[7] = addWorkdays(getAct(3), 3);
