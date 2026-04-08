@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e ':*)",
+      "Bash(curl -s \"http://localhost:5000/performance/leaderboard\")",
+      "Bash(curl:*)",
+      "Bash(node test_leaderboard.js)",
+      "Bash(tasklist:*)"
+    ]
+  }
+}

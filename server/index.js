@@ -32,12 +32,35 @@ const db = mysql.createPool({
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
     waitForConnections: true,
-    connectionLimit: 20,
+    connectionLimit: 10,
     queueLimit: 0,
     enableKeepAlive: true,
-    keepAliveInitialDelay: 0,
+    keepAliveInitialDelay: 10000,
+    connectTimeout: 20000,
     dateStrings: true
 });
+
+// Swallow idle-connection errors so the pool auto-reconnects instead of crashing
+db.on('connection', conn => {
+    conn.on('error', err => {
+        if (err.code === 'ECONNRESET' || err.code === 'PROTOCOL_CONNECTION_LOST') {
+            console.warn('DB connection lost, pool will reconnect:', err.code);
+        }
+    });
+});
+
+// Retry helper — retries once on ECONNRESET / connection-lost errors
+const dbQuery = async (sql, params) => {
+    try {
+        return await db.query(sql, params);
+    } catch (err) {
+        if (err.code === 'ECONNRESET' || err.code === 'PROTOCOL_CONNECTION_LOST' || err.code === 'ENOTFOUND') {
+            console.warn('DB query failed, retrying once...', err.code);
+            return await db.query(sql, params);
+        }
+        throw err;
+    }
+};
 
 // --- GOOGLE AUTH ---
 const getAuth = () => {
@@ -594,35 +617,35 @@ app.get('/performance/leaderboard', async (req, res) => {
         // Date range for delegation & FMS: use provided range, else all-time
         const delDateFilter = (start && end) ? `AND target_date BETWEEN '${start}' AND '${end}'` : '';
         const fmsDateFilter = (start && end) ? `AND plan_date BETWEEN '${start}' AND '${end} 23:59:59'` : '';
-        // Checklist: never count upcoming tasks (target_date <= today), plus optional range
+        // Checklist: ignore upcoming tasks (target_date <= today), plus optional range
         const chkDateFilter = (start && end)
             ? `AND target_date BETWEEN '${start}' AND '${end}'`
             : `AND target_date <= '${today}'`;
 
-        const [users] = await db.query("SELECT id, name, email FROM users WHERE role != 'Admin'");
+        const [users] = await dbQuery("SELECT id, name, email FROM users WHERE role != 'Admin'");
 
-        const [delRows] = await db.query(`
+        const [delRows] = await dbQuery(`
             SELECT assigned_to_email as email,
                 COUNT(*) as total,
                 SUM(CASE WHEN status='Completed' THEN 1 ELSE 0 END) as completed,
-                SUM(CASE WHEN status NOT IN ('Completed') AND target_date < '${today}' THEN 1 ELSE 0 END) as delayed
+                SUM(CASE WHEN status NOT IN ('Completed') AND target_date < '${today}' THEN 1 ELSE 0 END) as \`delayed\`
             FROM tasks WHERE 1=1 ${delDateFilter} GROUP BY assigned_to_email
         `);
 
-        const [chkRows] = await db.query(`
+        const [chkRows] = await dbQuery(`
             SELECT employee_email as email,
                 COUNT(*) as total,
                 SUM(CASE WHEN status='Completed' THEN 1 ELSE 0 END) as completed,
-                SUM(CASE WHEN status != 'Completed' AND target_date < '${today}' THEN 1 ELSE 0 END) as delayed
+                SUM(CASE WHEN status != 'Completed' AND target_date < '${today}' THEN 1 ELSE 0 END) as \`delayed\`
             FROM checklist_tasks WHERE 1=1 ${chkDateFilter} GROUP BY employee_email
         `);
 
-        const [fmsTasks] = await db.query(`
+        const [fmsTasks] = await dbQuery(`
             SELECT step_id, status,
                 CASE WHEN status != 'Completed' AND plan_date < NOW() THEN 1 ELSE 0 END as is_delayed
             FROM fms_dibiaa_tasks WHERE 1=1 ${fmsDateFilter}
         `);
-        const [stepConfigs] = await db.query("SELECT step_id, doer_emails FROM fms_dibiaa_steps_config");
+        const [stepConfigs] = await dbQuery("SELECT step_id, doer_emails FROM fms_dibiaa_steps_config");
 
         const stepDoerMap = {};
         stepConfigs.forEach(s => {
@@ -667,7 +690,7 @@ app.get('/performance/tasks', async (req, res) => {
         if (category === 'delegation') {
             const dateFilter = (start && end) ? `AND target_date BETWEEN ? AND ?` : '';
             const params = start && end ? [email, start, end] : [email];
-            const [rows] = await db.query(
+            const [rows] = await dbQuery(
                 `SELECT id, description, status, target_date, priority,
                     CASE WHEN status NOT IN ('Completed') AND target_date < '${today}' THEN 1 ELSE 0 END as is_delayed
                 FROM tasks WHERE assigned_to_email = ? ${dateFilter} ORDER BY target_date ASC`,
@@ -679,7 +702,7 @@ app.get('/performance/tasks', async (req, res) => {
         if (category === 'checklist') {
             const dateFilter = (start && end) ? `AND target_date BETWEEN ? AND ?` : `AND target_date <= '${today}'`;
             const params = start && end ? [email, start, end] : [email];
-            const [rows] = await db.query(
+            const [rows] = await dbQuery(
                 `SELECT id, description, status, target_date, NULL as priority,
                     CASE WHEN status != 'Completed' AND target_date < '${today}' THEN 1 ELSE 0 END as is_delayed
                 FROM checklist_tasks WHERE employee_email = ? ${dateFilter} ORDER BY target_date ASC`,
@@ -689,7 +712,7 @@ app.get('/performance/tasks', async (req, res) => {
         }
 
         if (category === 'fms') {
-            const [steps] = await db.query(
+            const [steps] = await dbQuery(
                 "SELECT step_id FROM fms_dibiaa_steps_config WHERE doer_emails LIKE ?",
                 [`%${email}%`]
             );
@@ -697,7 +720,7 @@ app.get('/performance/tasks', async (req, res) => {
             const stepIds = steps.map(s => s.step_id);
             const dateFilter = (start && end) ? `AND t.plan_date BETWEEN ? AND ?` : '';
             const params = start && end ? [stepIds, start, `${end} 23:59:59`] : [stepIds];
-            const [rows] = await db.query(
+            const [rows] = await dbQuery(
                 `SELECT t.id,
                     CONCAT('#', COALESCE(r.job_number,'?'), ' - ', COALESCE(r.company_name,'Unknown')) as description,
                     COALESCE(s.step_name, 'Unknown Step') as priority,
@@ -1813,6 +1836,30 @@ app.post('/fms/toggle-hold', async (req, res) => {
 
         await db.query(sql, params);
         res.json({ message: `Job ${job_number} is now ${newStatus} at IST ${nowIST}` });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Route to Hold/Unhold a single task (used by Step 13 QC+Packing)
+app.post('/fms/task-hold', async (req, res) => {
+    const { task_id, action, reason } = req.body;
+    if (!task_id || !action) return res.status(400).json({ error: 'task_id and action are required' });
+    const nowIST = dayjs().tz("Asia/Kolkata").format('YYYY-MM-DD HH:mm:ss');
+    try {
+        if (action === 'Hold') {
+            if (!reason) return res.status(400).json({ error: 'Reason is required to Hold' });
+            await db.query(
+                `UPDATE fms_dibiaa_tasks SET status = 'Hold', hold_reason = ?, hold_timestamp = ?, unhold_timestamp = NULL WHERE id = ?`,
+                [reason, nowIST, task_id]
+            );
+        } else {
+            await db.query(
+                `UPDATE fms_dibiaa_tasks SET status = 'Pending', unhold_timestamp = ? WHERE id = ?`,
+                [nowIST, task_id]
+            );
+        }
+        res.json({ message: `Task ${action === 'Hold' ? 'placed on hold' : 'released'} at IST ${nowIST}` });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
