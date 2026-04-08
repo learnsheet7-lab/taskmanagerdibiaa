@@ -1591,6 +1591,151 @@ app.get('/mis/checklist-report', async (req, res) => {
     }
 });
 
+// ─── FMS MIS REPORT ────────────────────────────────────────────────────────
+
+// Auto-create fms_employee_plans table on startup
+db.query(`CREATE TABLE IF NOT EXISTS fms_employee_plans (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    employee_email VARCHAR(255) NOT NULL,
+    plan_date DATE NOT NULL,
+    planned_count INT DEFAULT 0,
+    UNIQUE KEY uq_fms_plan (employee_email, plan_date)
+)`).catch(e => console.warn('fms_employee_plans create warning:', e.message));
+
+app.get('/mis/fms-report', async (req, res) => {
+    try {
+        const { start, end } = req.query;
+        if (!start || !end) return res.status(400).json({ error: 'start and end required' });
+        const now = dayjs().format('YYYY-MM-DD HH:mm:ss');
+
+        const [users]   = await dbQuery("SELECT name, email FROM users WHERE role != 'Admin'");
+        const [configs] = await dbQuery("SELECT step_id, doer_emails FROM fms_dibiaa_steps_config WHERE doer_emails IS NOT NULL AND doer_emails != ''");
+        const [tasks]   = await dbQuery(
+            `SELECT t.step_id, t.status, t.plan_date, t.actual_date,
+                CONCAT('#', COALESCE(r.job_number,'N/A'), ' - ', COALESCE(r.company_name,'Unknown')) as description,
+                COALESCE(s.step_name,'Unknown Step') as step_name
+             FROM fms_dibiaa_tasks t
+             LEFT JOIN fms_dibiaa_raw r ON t.job_id = r.job_id
+             LEFT JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
+             WHERE t.plan_date BETWEEN ? AND ?`,
+            [start, `${end} 23:59:59`]
+        );
+        const [plans] = await dbQuery(
+            "SELECT employee_email, SUM(planned_count) as planned FROM fms_employee_plans WHERE plan_date <= ? GROUP BY employee_email",
+            [end]
+        );
+
+        // step_id → [emails]
+        const stepDoerMap = {};
+        configs.forEach(c => {
+            stepDoerMap[c.step_id] = (c.doer_emails || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+        });
+
+        // email → tasks[]
+        const userTaskMap = {};
+        tasks.forEach(task => {
+            (stepDoerMap[task.step_id] || []).forEach(email => {
+                if (!userTaskMap[email]) userTaskMap[email] = [];
+                userTaskMap[email].push(task);
+            });
+        });
+
+        const planMap = {};
+        plans.forEach(p => { planMap[p.employee_email.toLowerCase()] = Number(p.planned || 0); });
+
+        const result = [];
+        users.forEach(u => {
+            const email = u.email.toLowerCase();
+            const userTasks = userTaskMap[email] || [];
+            if (!userTasks.length && !planMap[email]) return;
+
+            let ontime = 0, delayed = 0, completed = 0;
+            userTasks.forEach(t => {
+                if (t.status === 'Completed') {
+                    completed++;
+                    const late = t.actual_date && dayjs(t.actual_date).isAfter(dayjs(t.plan_date));
+                    if (late) delayed++; else ontime++;
+                } else {
+                    if (dayjs(t.plan_date).isBefore(dayjs(now))) delayed++;
+                }
+            });
+
+            const total = userTasks.length;
+            result.push({
+                employee_name:  u.name,
+                employee_email: u.email,
+                planned:        planMap[email] || 0,
+                total_task:     total,
+                total_completed: completed,
+                total_pending:  total - completed,
+                total_ontime:   ontime,
+                total_delayed:  delayed,
+                pct_ontime:     total > 0 ? ((ontime  / total) * 100).toFixed(1) : '0.0',
+                pct_delayed:    total > 0 ? ((delayed / total) * 100).toFixed(1) : '0.0',
+            });
+        });
+
+        res.json(result);
+    } catch (err) {
+        console.error('FMS MIS Report Error:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/mis/fms-tasks', async (req, res) => {
+    try {
+        const { email, start, end } = req.query;
+        if (!email) return res.json([]);
+        const [configs] = await dbQuery(
+            "SELECT step_id FROM fms_dibiaa_steps_config WHERE doer_emails LIKE ?",
+            [`%${email}%`]
+        );
+        if (!configs.length) return res.json([]);
+        const stepIds = configs.map(c => c.step_id);
+        const [rows] = await dbQuery(
+            `SELECT
+                CONCAT('#', COALESCE(r.job_number,'N/A'), ' - ', COALESCE(r.company_name,'Unknown')) as description,
+                COALESCE(s.step_name,'Unknown Step') as step_name,
+                t.plan_date as target_date,
+                t.status,
+                t.actual_date as completed_at,
+                CASE
+                    WHEN t.status = 'Completed' AND t.actual_date > t.plan_date THEN 'Delayed'
+                    WHEN t.status != 'Completed' AND t.plan_date < NOW()        THEN 'Delayed'
+                    WHEN t.status = 'Completed'                                 THEN 'Ontime'
+                    ELSE 'Pending'
+                END as timing
+             FROM fms_dibiaa_tasks t
+             LEFT JOIN fms_dibiaa_raw r  ON t.job_id  = r.job_id
+             LEFT JOIN fms_dibiaa_steps_config s ON t.step_id = s.step_id
+             WHERE t.step_id IN (?) AND t.plan_date BETWEEN ? AND ?
+             ORDER BY t.plan_date ASC`,
+            [stepIds, start, `${end} 23:59:59`]
+        );
+        res.json(rows);
+    } catch (err) {
+        console.error('FMS MIS Tasks Error:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/mis/fms-plan', async (req, res) => {
+    try {
+        const { email, date, count } = req.body;
+        await dbQuery(
+            `INSERT INTO fms_employee_plans (employee_email, plan_date, planned_count)
+             VALUES (?, ?, ?)
+             ON DUPLICATE KEY UPDATE planned_count = VALUES(planned_count)`,
+            [email, date, count]
+        );
+        res.json({ message: 'Saved' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+
 // 1. Fetch All Logs for Admin
 app.get('/fms/logs', async (req, res) => {
     try {
