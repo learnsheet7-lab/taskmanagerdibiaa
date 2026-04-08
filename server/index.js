@@ -722,7 +722,7 @@ app.get('/performance/tasks', async (req, res) => {
             const params = start && end ? [stepIds, start, `${end} 23:59:59`] : [stepIds];
             const [rows] = await dbQuery(
                 `SELECT t.id,
-                    CONCAT('#', COALESCE(r.job_number,'?'), ' - ', COALESCE(r.company_name,'Unknown')) as description,
+                    CONCAT('#', COALESCE(r.job_number,'N/A'), ' - ', COALESCE(r.company_name,'Unknown')) as description,
                     COALESCE(s.step_name, 'Unknown Step') as priority,
                     t.plan_date as target_date, t.status,
                     CASE WHEN t.status != 'Completed' AND t.plan_date < NOW() THEN 1 ELSE 0 END as is_delayed
